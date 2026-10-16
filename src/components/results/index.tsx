@@ -7,6 +7,7 @@ import ActionPlan from "./ActionPlan";
 import DocumentReview from "./DocumentReview";
 import DraftEmail from "./DraftEmail";
 import LivingCostPlan from "./LivingCostPlan";
+import SafeToSendDecision from "./SafeToSendDecision";
 import { asString } from "./shared";
 
 const TITLES: Record<string, string> = {
@@ -17,6 +18,7 @@ const TITLES: Record<string, string> = {
   document_review: "Document review",
   draft_email: "Email draft",
   living_cost_plan: "Destination budget",
+  safe_to_send_decision: "Safe-to-Send decision",
 };
 
 interface Props {
@@ -56,6 +58,9 @@ export default function ResultCard({ component, data, onFollowUpMessage, session
       break;
     case "living_cost_plan":
       body = <LivingCostPlan data={data} sessionId={sessionId} />;
+      break;
+    case "safe_to_send_decision":
+      body = <SafeToSendDecision data={data} sessionId={sessionId} />;
       break;
     default:
       body = (

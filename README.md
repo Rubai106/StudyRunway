@@ -79,6 +79,56 @@ sample case (Limerick, Ireland — €900/mo, shared accommodation) through the
 real tool path, honestly labelled. Or type any message and answer the
 clarifying question it asks.
 
+## Judge-ready Funding Risk Agent (deterministic-first)
+
+StudyRunway now connects three deterministic capabilities into one workflow:
+
+1. **Safe-to-Send** tuition decisioning (`READY_TO_SIMULATE`, `RISK_DETECTED`, `MORE_INFORMATION_REQUIRED`, `BLOCKED`)
+2. **Funding Timeline** (expected/received/delayed/cancelled inflows + obligations + projected balance)
+3. **Delay Recovery** (hypothetical delay/cancellation scenarios + earliest-shortfall + recovery assumptions)
+
+Core implementation:
+
+- Engine: `src/lib/safeToSend/engine.ts`
+- Tool/actions + state transitions: `src/lib/tools/safeToSend.ts`
+- API route: `src/app/api/agent/safe-to-send/route.ts`
+- UI card: `src/components/results/SafeToSendDecision.tsx`
+
+### Deterministic vs AI responsibilities
+
+- **Deterministic server code (authoritative):** calculations, timeline projection,
+  earliest-shortfall detection, Safe-to-Send status, stage transitions,
+  approval validation, sandbox simulation apply/revert, and receipt export.
+- **AI (optional):** natural-language understanding, clarification prompts,
+  and explanation of deterministic outputs.
+
+No AI response can authorize a simulation or override a decision status.
+
+### Run the no-key demo (judge flow)
+
+1. Open chat and click **Try the Safe-to-Send tuition demo**.
+2. In the card, click **Load demo baseline**.
+3. Review baseline timeline and earliest shortfall.
+4. Apply **+7 days** delay on scholarship funding.
+5. Review scenario shortfall and obligations at risk.
+6. Apply a recovery assumption and recalculate.
+7. Review **Why this decision?** and **Decision evidence**.
+8. If status is `READY_TO_SIMULATE`, click **Approve and simulate**.
+9. Review latest sandbox action and updated forecast impact.
+10. Optionally **Revert latest simulation**.
+11. Click **Download sandbox execution record** for a sanitized JSON receipt.
+
+### Sandbox execution record export
+
+- Endpoint: `GET /api/agent/safe-to-send?sessionId=...&simulationId=...&download=1`
+- Returns only sanitized simulation/decision/forecast fields from recorded state.
+- No API keys, secrets, or hidden prompts are included.
+
+### Storage limitation
+
+Funding-risk workflow state and sandbox records are session-scoped in-memory
+objects and are not durable across process restarts.
+
 ## Verification status
 
 The 2026-10-15 runtime results documented in `docs/TEST_RESULTS.md` apply to

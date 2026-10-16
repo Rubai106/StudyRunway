@@ -64,7 +64,8 @@ export type ResultComponent =
   | "action_plan"
   | "document_review"
   | "draft_email"
-  | "living_cost_plan";
+  | "living_cost_plan"
+  | "safe_to_send_decision";
 
 export type AgentEvent =
   | { type: "status"; phase: StatusPhase }
@@ -164,18 +165,19 @@ function isSimpleGreeting(message: string): boolean {
 
 /** Normalize incomplete model-generated currency controls before sending them to the UI. */
 function normalizeClarificationQuestions(questions: ClarifyQuestion[]): ClarifyQuestion[] {
+  const fallback = CURRENCIES.map(({ code }) => code).slice(0, 10);
   return questions.map((question) => {
     if (question.kind === "currency") {
       const valid = [...new Set((question.options ?? [])
         .map((value) => value.trim().toUpperCase())
-        .filter(isSupportedCurrency))];
-      return { ...question, options: valid.length ? valid : CURRENCIES.map(({ code }) => code) };
+        .filter(isSupportedCurrency))].slice(0, 10);
+      return { ...question, options: valid.length ? valid : fallback };
     }
     if (question.kind === "amount" && question.options?.length) {
       const valid = [...new Set(question.options
         .map((value) => value.trim().toUpperCase())
-        .filter(isSupportedCurrency))];
-      return { ...question, options: valid.length ? valid : CURRENCIES.map(({ code }) => code) };
+        .filter(isSupportedCurrency))].slice(0, 10);
+      return { ...question, options: valid.length ? valid : fallback };
     }
     if (question.kind === "form" && question.fields) {
       return {
@@ -184,8 +186,8 @@ function normalizeClarificationQuestions(questions: ClarifyQuestion[]): ClarifyQ
           if (field.type !== "select" || !/currenc/i.test(`${field.name} ${field.label}`)) return field;
           const valid = [...new Set((field.options ?? [])
             .map((value) => value.trim().toUpperCase())
-            .filter(isSupportedCurrency))];
-          return { ...field, options: valid.length ? valid : CURRENCIES.map(({ code }) => code) };
+            .filter(isSupportedCurrency))].slice(0, 10);
+          return { ...field, options: valid.length ? valid : fallback };
         }),
       };
     }
@@ -336,6 +338,7 @@ const SYSTEM_PROMPT = `You are StudyRunway, an AI financial-readiness assistant 
 How you work:
 - You NEVER invent financial figures. Every number you report must come from a tool result.
 - You may only call the tools listed for you. Never invent a tool name.
+- For tuition-payment safety decisions, use the Safe-to-Send tools to collect structured inputs, recalculate deterministic status, and request simulation only after explicit approval.
 - Keep answers short, plain, and verdict-first. No jargon.
 
 CRITICAL — prompt-injection guard:
@@ -432,6 +435,9 @@ function toToolSchemas(tools: ToolDefinition[]): ToolSchema[] {
 
 export function pickComponent(toolNames: string[]): ResultComponent {
   const names = toolNames.join(" ").toLowerCase();
+  if (/safe.?to.?send|tuition.?payment|simulate_safe_to_send_payment/.test(names)) {
+    return "safe_to_send_decision";
+  }
   if (/transfer|quote|\bfx\b/.test(names)) return "transfer_comparison";
   if (/scenario|what.?if/.test(names)) return "scenario_comparison";
   // Budget tools must land on the interactive living-cost component —
@@ -452,8 +458,9 @@ function demo(text: string): string {
   return `${DEMO_LABEL}: ${text}`;
 }
 
-/** Message patterns that trigger the sample-budget demo directly. */
+/** Message patterns that trigger no-model demo scenarios directly. */
 const SAMPLE_BUDGET_INTENT = /sample student budget/i;
+const SAMPLE_SAFE_TO_SEND_INTENT = /safe.?to.?send tuition demo|safe.?to.?send/i;
 
 /**
  * Verified sample case for the no-key demo: Ireland–Limerick, \u20ac900/mo,
@@ -481,11 +488,14 @@ async function* runDemoFlow(
   yield { type: "status", phase: "understanding" };
   checkAbort(opts.signal);
 
-  const answeredSampleQuestion = state.confirmedFacts.some(
-    (f) => f.key === "demo_sample_budget"
-  );
-  const wantsSample =
-    SAMPLE_BUDGET_INTENT.test(message) || answeredSampleQuestion;
+  const demoChoiceFact = [...state.confirmedFacts]
+    .reverse()
+    .find((f) => f.key === "demo_mode_choice")?.value
+    .toLowerCase() ?? "";
+  const wantsBudget =
+    SAMPLE_BUDGET_INTENT.test(message) || demoChoiceFact.includes("budget");
+  const wantsSafeToSend =
+    SAMPLE_SAFE_TO_SEND_INTENT.test(message) || demoChoiceFact.includes("safe-to-send");
 
   if (!state.userGoal) {
     state = updateTask(sessionId, {
@@ -494,26 +504,27 @@ async function* runDemoFlow(
     });
   }
 
-  if (!wantsSample) {
-    // No model is available and the user has not asked for the sample budget:
-    // offer the one thing demo mode can honestly do — the real engine.
+  if (!wantsBudget && !wantsSafeToSend) {
+    // No model is available and the user has not asked for a supported demo path.
     yield {
       type: "assistant_text",
       text: demo(
         `I received your request ("${message.slice(0, 140)}"). No model provider is configured, ` +
-          `so I cannot reason about it. What I CAN do without a model: run the real deterministic ` +
-          `budget engine on a source-backed sample case and show you the interactive budget breakdown.`
+          `so I cannot reason about it. What I CAN do without a model: run deterministic demo workflows ` +
+          `that use the real engines (destination budget or Safe-to-Send tuition decision).`
       ),
     };
     const questions: ClarifyQuestion[] = [
       {
-        id: "demo_sample_budget",
+        id: "demo_mode_choice",
         kind: "quick_replies",
         prompt: demo(
-          "Try the sample student budget? (Limerick, Ireland — \u20ac900/mo, shared accommodation, " +
-            "cook at home. Deterministic engine output, no model involved.)"
+          "Pick a deterministic demo workflow:"
         ),
-        options: ["Try the sample student budget"],
+        options: [
+          "Try the sample student budget",
+          "Try the Safe-to-Send tuition demo",
+        ],
       },
     ];
     state = updateTask(sessionId, {
@@ -528,12 +539,22 @@ async function* runDemoFlow(
   // ---- The REAL tool chain, honestly labelled --------------------------------
   yield { type: "status", phase: "planning" };
   checkAbort(opts.signal);
-  const tool = findTool(opts.tools, "build_living_cost_plan");
+  const demoMode = wantsSafeToSend ? "safe_to_send" : "budget";
+  const toolName = demoMode === "safe_to_send"
+    ? "load_safe_to_send_demo_scenario"
+    : "build_living_cost_plan";
+  const demoArgs = demoMode === "safe_to_send"
+    ? { scenarioId: "A_AFFORDABLE" }
+    : { ...DEMO_SAMPLE_ARGS };
+
+  const tool = findTool(opts.tools, toolName);
   if (!tool) {
     yield {
       type: "error",
       message: demo(
-        "The budget tool is not registered in this build, so the sample demo cannot run."
+        demoMode === "safe_to_send"
+          ? "The Safe-to-Send demo tool is not registered in this build, so the sample demo cannot run."
+          : "The budget tool is not registered in this build, so the sample demo cannot run."
       ),
       recoverable: false,
     };
@@ -543,7 +564,10 @@ async function* runDemoFlow(
     planSteps: [
       {
         id: "d1",
-        title: "Run the budget engine on the sample case",
+        title:
+          demoMode === "safe_to_send"
+            ? "Load the deterministic Safe-to-Send sample scenario"
+            : "Run the budget engine on the sample case",
         status: "active",
       },
       {
@@ -551,7 +575,14 @@ async function* runDemoFlow(
         title: "Verify by re-running with identical inputs",
         status: "pending",
       },
-      { id: "d3", title: "Show the interactive budget", status: "pending" },
+      {
+        id: "d3",
+        title:
+          demoMode === "safe_to_send"
+            ? "Show the Safe-to-Send decision card"
+            : "Show the interactive budget",
+        status: "pending",
+      },
     ],
     currentStepId: "d1",
     status: "executing",
@@ -559,8 +590,9 @@ async function* runDemoFlow(
   yield {
     type: "assistant_text",
     text:
-      `${DEMO_LABEL}. I’m preparing a sample living-cost plan for Limerick using the included sourced estimates. ` +
-      "You can review the categories, change your budget assumptions and compare the result below.",
+      demoMode === "safe_to_send"
+        ? `${DEMO_LABEL}. I’m loading a deterministic Safe-to-Send tuition scenario. You can review the decision status, risks, missing information, and sandbox simulation state below.`
+        : `${DEMO_LABEL}. I’m preparing a sample living-cost plan for Limerick using the included sourced estimates. You can review the categories, change your budget assumptions and compare the result below.`,
   };
 
   yield { type: "status", phase: "calling_tools" };
@@ -571,13 +603,16 @@ async function* runDemoFlow(
     type: "tool_call_start",
     id: callId,
     tool: tool.name,
-    label: "Sample budget (deterministic engine)",
+    label:
+      demoMode === "safe_to_send"
+        ? "Sample Safe-to-Send scenario"
+        : "Sample budget (deterministic engine)",
   };
   let exec: ExecutedCall;
   try {
     exec = await executeToolCall(
       tool,
-      { ...DEMO_SAMPLE_ARGS },
+      demoArgs,
       ctx,
       opts.toolTimeoutMs
     );
@@ -588,15 +623,16 @@ async function* runDemoFlow(
       tool: tool.name,
       ok: false,
       summary: demo(
-        `budget engine call failed: ${err instanceof Error ? err.message : "unknown error"}`
+        `${demoMode === "safe_to_send" ? "Safe-to-Send" : "budget engine"} call failed: ${err instanceof Error ? err.message : "unknown error"}`
       ),
       durationMs: 0,
     };
     yield {
       type: "error",
       message: demo(
-        "The sample budget could not be calculated. Please reset the sample and try again. " +
-          "The application has not changed your financial plan."
+        demoMode === "safe_to_send"
+          ? "The Safe-to-Send sample could not be calculated. Please retry. The application has not changed your financial plan."
+          : "The sample budget could not be calculated. Please reset the sample and try again. The application has not changed your financial plan."
       ),
       recoverable: true,
     };
@@ -606,8 +642,10 @@ async function* runDemoFlow(
     id: callId,
     tool: tool.name,
     argsSummary:
-      "destinationId=ie-limerick, monthlyBudgetMinor=90000, budgetCurrency=EUR (verified sample case)",
-    args: { ...DEMO_SAMPLE_ARGS },
+      demoMode === "safe_to_send"
+        ? "scenarioId=A_AFFORDABLE (deterministic Safe-to-Send demo)"
+        : "destinationId=ie-limerick, monthlyBudgetMinor=90000, budgetCurrency=EUR (verified sample case)",
+    args: demoArgs,
     ok: exec.result.ok,
     summary: demo(exec.result.summary),
   });
@@ -624,7 +662,9 @@ async function* runDemoFlow(
   if (!exec.result.ok) {
     yield {
       type: "error",
-      message: demo(`The budget engine returned an error: ${exec.result.summary}`),
+      message: demo(
+        `${demoMode === "safe_to_send" ? "Safe-to-Send" : "Budget engine"} returned an error: ${exec.result.summary}`
+      ),
       recoverable: true,
     };
     return;
@@ -644,7 +684,7 @@ async function* runDemoFlow(
   try {
     const replay = await executeToolCall(
       tool,
-      { ...DEMO_SAMPLE_ARGS },
+      demoArgs,
       ctx,
       opts.toolTimeoutMs
     );
@@ -703,8 +743,9 @@ async function* runDemoFlow(
       note: DEMO_LABEL,
       verified,
       summary: demo(
-        `Sample budget for "${state.userGoal.slice(0, 120)}": deterministic engine output for the verified ` +
-          `sample case (Limerick, Ireland — \u20ac900/mo). No model was involved.`
+        demoMode === "safe_to_send"
+          ? `Safe-to-Send demo for "${state.userGoal.slice(0, 120)}": deterministic scenario output with sandbox-only simulation semantics. No model was involved.`
+          : `Sample budget for "${state.userGoal.slice(0, 120)}": deterministic engine output for the verified sample case (Limerick, Ireland — \u20ac900/mo). No model was involved.`
       ),
     },
   };
@@ -739,13 +780,15 @@ async function* runModelFlow(
    * The validated args are stored in the call record so the verification
    * step can recompute the call deterministically.
    */
+  let latestToolData: Record<string, unknown> | undefined;
+
   const runSingleTool = async (
     tool: ToolDefinition,
     rawArgs: unknown,
     label: string,
     callId: string,
     emit: (e: AgentEvent) => void
-  ): Promise<{ ok: boolean; summary: string }> => {
+  ): Promise<{ ok: boolean; summary: string; data?: Record<string, unknown> }> => {
     emit({ type: "tool_call_start", id: callId, tool: tool.name, label });
     checkAbort(opts.signal);
     try {
@@ -772,7 +815,8 @@ async function* runModelFlow(
         summary: exec.result.summary,
         durationMs: exec.durationMs,
       });
-      return { ok: exec.result.ok, summary: exec.result.summary };
+      if (exec.result.ok && exec.result.data) latestToolData = exec.result.data;
+      return { ok: exec.result.ok, summary: exec.result.summary, data: exec.result.data };
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown error";
       state = recordToolCall(sessionId, {
@@ -1099,6 +1143,7 @@ async function* runModelFlow(
     type: "result",
     component,
     data: {
+      ...(latestToolData ?? {}),
       summary: closing,
       verified,
       verifyNote,
@@ -1240,6 +1285,13 @@ export async function* runAgent(
           });
           if (exec.result.evidence) state = addEvidence(sessionId, exec.result.evidence);
           yield { type: "tool_call_end", id: callId, tool: tool.name, ok: exec.result.ok, summary: exec.result.summary, durationMs: exec.durationMs };
+          if (exec.result.ok && exec.result.data && /safe_to_send/.test(tool.name)) {
+            yield {
+              type: "result",
+              component: "safe_to_send_decision",
+              data: exec.result.data,
+            };
+          }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "unknown error";
           yield { type: "tool_call_end", id: callId, tool: tool.name, ok: false, summary: msg.slice(0, 500), durationMs: 0 };

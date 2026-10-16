@@ -18,6 +18,7 @@ import { researchPolicyTool } from "./researchPolicy";
 import { buildActionPlanTool } from "./buildActionPlan";
 import { draftEmailTool } from "./draftEmail";
 import { buildLivingCostPlanTool } from "./buildLivingCostPlan";
+import { safeToSendTools } from "./safeToSend";
 import type { ToolDefinition, ToolContext, ToolResult } from "./types";
 
 export const TOOLS: ToolDefinition[] = [
@@ -29,6 +30,7 @@ export const TOOLS: ToolDefinition[] = [
   buildActionPlanTool,
   draftEmailTool,
   buildLivingCostPlanTool,
+  ...safeToSendTools,
 ];
 
 export {
@@ -40,5 +42,6 @@ export {
   buildActionPlanTool,
   draftEmailTool,
   buildLivingCostPlanTool,
+  safeToSendTools,
 };
 export type { ToolDefinition, ToolContext, ToolResult };

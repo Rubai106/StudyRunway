@@ -43,9 +43,9 @@ function samplePlanInput() {
 }
 
 describe("TOOLS registry", () => {
-  it("exports exactly the eight financial tools", () => {
-    expect(TOOLS).toHaveLength(8);
-    expect(TOOLS.map((t) => t.name).sort()).toEqual(
+  it("exports baseline financial tools plus safe-to-send workflow tools", () => {
+    const names = TOOLS.map((t) => t.name).sort();
+    expect(names).toEqual(
       [
         "analyze_funding_gap",
         "build_action_plan",
@@ -55,6 +55,19 @@ describe("TOOLS registry", () => {
         "extract_document",
         "research_policy",
         "simulate_scenario",
+        "upsert_safe_to_send_draft",
+        "add_safe_to_send_quote",
+        "upsert_safe_to_send_funding_record",
+        "confirm_safe_to_send_funding_receipt",
+        "set_safe_to_send_delay_scenario",
+        "clear_safe_to_send_delay_scenario",
+        "apply_safe_to_send_recovery_assumption",
+        "clear_safe_to_send_recovery_assumption",
+        "recalculate_safe_to_send_decision",
+        "get_safe_to_send_decision",
+        "load_safe_to_send_demo_scenario",
+        "simulate_safe_to_send_payment",
+        "revert_safe_to_send_simulation",
       ].sort(),
     );
   });
@@ -69,11 +82,15 @@ describe("TOOLS registry", () => {
     }
   });
 
-  it("draft_email is the only tool that requires approval", () => {
+  it("approval-gated tools are explicit and minimal", () => {
     expect(draftEmailTool.requiresApproval).toBe(true);
-    for (const t of TOOLS.filter((t) => t.name !== "draft_email")) {
-      expect(t.requiresApproval).toBe(false);
-    }
+    const requiresApproval = TOOLS.filter((t) => t.requiresApproval).map((t) => t.name).sort();
+    expect(requiresApproval).toEqual([
+      "confirm_safe_to_send_funding_receipt",
+      "draft_email",
+      "revert_safe_to_send_simulation",
+      "simulate_safe_to_send_payment",
+    ].sort());
   });
 });
 

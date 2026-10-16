@@ -85,6 +85,51 @@ const ApprovalRecordSchema = z.object({
   at: z.string(),
 });
 
+export const SafeToSendWorkflowStageSchema = z.enum([
+  "INTAKE",
+  "COLLECTING_INFORMATION",
+  "FUNDING_PLAN_READY",
+  "SCENARIO_EVALUATED",
+  "RECOVERY_REVIEW",
+  "AWAITING_APPROVAL",
+  "SIMULATED",
+  "REVERTED",
+  "BLOCKED",
+]);
+export type SafeToSendWorkflowStage = z.infer<typeof SafeToSendWorkflowStageSchema>;
+
+export const SafeToSendEventSchema = z.object({
+  id: z.string().min(1).max(120),
+  at: z.string(),
+  type: z.enum([
+    "input_collected",
+    "timeline_calculated",
+    "scenario_applied",
+    "recovery_applied",
+    "decision_evaluated",
+    "approval_requested",
+    "approval_rejected",
+    "simulation_applied",
+    "simulation_reverted",
+    "receipt_confirmed",
+    "blocked",
+    "error",
+  ]),
+  status: z.enum(["pending", "completed", "blocked", "failed"]),
+  label: z.string().min(1).max(240),
+  detail: z.string().max(1000).optional(),
+  data: z.record(z.unknown()).optional(),
+});
+export type SafeToSendEvent = z.infer<typeof SafeToSendEventSchema>;
+
+const SafeToSendStateSchema = z.object({
+  draft: z.record(z.unknown()).nullable().default(null),
+  decision: z.record(z.unknown()).nullable().default(null),
+  records: z.array(z.record(z.unknown())).default([]),
+  workflowStage: SafeToSendWorkflowStageSchema.default("INTAKE"),
+  events: z.array(SafeToSendEventSchema).default([]),
+});
+
 export const TaskStateSchema = z.object({
   taskId: z.string().min(1),
   sessionId: z.string().min(1),
@@ -150,6 +195,14 @@ export const TaskStateSchema = z.object({
     })
     .nullable()
     .default(null),
+  /** Safe-to-Send tuition-payment workflow state (deterministic sandbox). */
+  safeToSend: SafeToSendStateSchema.default({
+    draft: null,
+    decision: null,
+    records: [],
+    workflowStage: "INTAKE",
+    events: [],
+  }),
   status: TaskStatusSchema,
   createdAt: z.string(),
   updatedAt: z.string(),

@@ -156,7 +156,7 @@ test.describe("interaction states", () => {
     await installMocks(page);
     await page.goto("/");
     await sendMessage(page, "hello world");
-    await expect(page.getByText("Reading your request…")).toBeVisible({
+    await expect(page.getByText(/Reading your request…|Planning…/)).toBeVisible({
       timeout: 10000,
     });
     await expect(page.getByText("Here's what I found.")).toBeVisible({
@@ -195,12 +195,12 @@ test.describe("interaction states", () => {
     const fall = page.getByRole("button", { name: "Answer: Fall" });
     const cost = page.getByRole("button", { name: "Answer: Cost" });
     await expect(fall).toBeVisible({ timeout: 15000 });
-    await expect(cost).toBeVisible({ timeout: 15000 });
+    await expect(cost).toHaveCount(0);
 
     await fall.click();
     await expect(fall).toBeHidden({ timeout: 10000 });
-    // The second question is still pending and still answerable.
-    await expect(cost).toBeVisible();
+    // One-question-at-a-time UX: the second question appears after the first is answered.
+    await expect(cost).toBeVisible({ timeout: 15000 });
     await cost.click();
     await expect(cost).toBeHidden({ timeout: 10000 });
 

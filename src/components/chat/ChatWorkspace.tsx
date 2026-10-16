@@ -45,6 +45,10 @@ const EXAMPLES = [
 export const SAMPLE_BUDGET_MESSAGE =
   "Try the sample student budget — show me the Limerick sample";
 
+/** Exact message the demo flow recognises as the Safe-to-Send sample entry point. */
+export const SAMPLE_SAFE_TO_SEND_MESSAGE =
+  "Try the Safe-to-Send tuition demo scenario";
+
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -301,7 +305,9 @@ export default function ChatWorkspace() {
         ? [...prev, userMessage, assistantMessage]
         : [...prev, assistantMessage]);
       setStreaming(true);
-      setActiveStatus("Continuing from your answer…");
+      setActiveStatus(
+        userMessage ? "Reading your request…" : "Continuing from your answer…",
+      );
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -633,6 +639,19 @@ function Intro({
         </span>
         <span className="mt-0.5 block text-xs text-white/75">
           Limerick, Ireland — €900/mo · real budget engine, no AI key needed
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onExample(SAMPLE_SAFE_TO_SEND_MESSAGE)}
+        disabled={disabled}
+        className="mt-3 w-full rounded-2xl border border-[var(--sr-line)] bg-white/90 px-4 py-3.5 text-left shadow-[0_1px_2px_rgba(31,42,38,0.08)] transition hover:border-[var(--sr-pine)]/60 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-wait disabled:opacity-60"
+      >
+        <span className="block text-sm font-semibold text-[var(--sr-ink)]">
+          Try the Safe-to-Send tuition demo
+        </span>
+        <span className="mt-0.5 block text-xs text-[var(--sr-ink)]/65">
+          Deterministic decision card + sandbox approval rules · no real transfer
         </span>
       </button>
       <div className="mt-4 grid w-full gap-2 text-left sm:grid-cols-2">

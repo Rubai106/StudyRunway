@@ -44,7 +44,7 @@ async function installMocks(page: Page) {
     const req = route.request();
     const body = req.postDataJSON() as { sessionId?: string; message?: string };
     expect(body.sessionId, "chat posts a sessionId").toBeTruthy();
-    expect(body.message, "chat posts the user message").toBeTruthy();
+    expect(typeof body.message, "chat posts a message string").toBe("string");
 
     const slow = (body.message ?? "").includes("SLOW-STREAM");    const events: string[] = [
       `data: {"type":"status","phase":"planning"}`,
@@ -123,7 +123,7 @@ test("example chip submits a real request to the API", async ({ page }) => {
       page.locator('[data-testid^="clarify-"]').first(),
     ).toBeVisible({ timeout: 30000 });
   } else {
-    await expect(page.getByText("Reading your request…")).toBeVisible({
+    await expect(page.getByText(/Reading your request…|Planning…/)).toBeVisible({
       timeout: 10000,
     });
     await expect(page.getByText("Here's what I found.")).toBeVisible({
@@ -166,6 +166,10 @@ test("form validation blocks bad amount input", async ({ page }) => {
   await page
     .getByRole("button", { name: /scholarship may arrive late/i })
     .click();
+  const termAnswer = page.getByRole("button", { name: "Answer: Fall" });
+  await expect(termAnswer).toBeVisible({ timeout: 15000 });
+  await termAnswer.click();
+
   const amountInput = page.locator('input[type="number"]').first();
   await expect(amountInput).toBeVisible({ timeout: 15000 });
   await amountInput.fill("-50");

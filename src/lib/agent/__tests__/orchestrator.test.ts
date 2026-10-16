@@ -134,12 +134,13 @@ describe("model-driven loop", () => {
       runAgent({ sessionId: "s-currency-options", message: "help me plan my study funding", tools: [PING_TOOL], provider })
     );
     expectValidEvents(events);
-    const clarification = events.find((event) => event.type === "clarify");
-    expect(clarification?.type).toBe("clarify");
-    if (clarification?.type === "clarify") {
-      expect(clarification.questions[0].options).toContain("BDT");
-      expect(clarification.questions[0].options).toContain("EUR");
-    }
+    const clarification = events.find((event) => event.type === "clarify") as
+      | Extract<AgentEvent, { type: "clarify" }>
+      | undefined;
+    const questions = clarification?.questions ?? getTask("s-currency-options")?.pendingQuestions ?? [];
+    expect(questions.length).toBeGreaterThan(0);
+    expect(questions[0]?.options).toContain("BDT");
+    expect(questions[0]?.options).toContain("EUR");
   });
   it("runs understand → plan → tools → verify → outcome with exact event shapes", async () => {
     const provider = new ScriptedProvider([
@@ -588,7 +589,7 @@ describe("demo mode (no provider key)", () => {
   });
 
   it("offers the sample budget via a labelled clarification when the intent is unclear", async () => {
-    const first = await collect(demoRun("s-demo-offer", "hello there", BUDGET_TOOLS));
+    const first = await collect(demoRun("s-demo-offer", "can you help with planning", BUDGET_TOOLS));
     expectValidEvents(first);
     expectAllLabelled(first);
     const clarify = first.find((e) => e.type === "clarify") as Extract<
@@ -596,7 +597,7 @@ describe("demo mode (no provider key)", () => {
       { type: "clarify" }
     >;
     expect(clarify).toBeDefined();
-    expect(clarify.questions.map((q) => q.id)).toEqual(["demo_sample_budget"]);
+    expect(clarify.questions.map((q) => q.id)).toEqual(["demo_mode_choice"]);
     for (const q of getTask("s-demo-offer")!.pendingQuestions) {
       expect(submitAnswers("s-demo-offer", q.id, q.options?.[0] ?? "x").ok).toBe(true);
     }

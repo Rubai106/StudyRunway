@@ -141,9 +141,9 @@ test.describe("destination budget planner", () => {
     await page.goto("/");
     await sendMessage(page, "help me plan my living costs abroad");
 
-    // Demo mode cannot reason — it asks the one honest clarifying question.
+    // Demo mode cannot reason — it asks an honest clarifying question.
     await expect(
-      page.getByText(/Try the sample student budget\?/),
+      page.getByText(/Pick a deterministic demo workflow/i),
     ).toBeVisible({ timeout: 30_000 });
     await page
       .getByRole("button", { name: "Answer: Try the sample student budget" })
@@ -434,4 +434,89 @@ test.describe("destination budget planner", () => {
     ).toBeVisible({ timeout: 60_000 });
     expectNoConsoleErrors(errors);
   });
+
+  test("[demo-mode · real engine] Safe-to-Send tuition demo exercises full delay, recovery, simulation, and revert workflow", async ({
+    page,
+  }) => {
+    const errors = watchConsole(page);
+    await page.goto("/");
+    const stsButton = page.getByRole("button", {
+      name: /Try the Safe-to-Send tuition demo/,
+    });
+    await expect(stsButton).toBeEnabled({ timeout: 15_000 });
+    await stsButton.click();
+
+    // The Safe-to-Send decision card renders with deterministic engine output
+    await expect(
+      page.getByText("Safe-to-Send + Funding Timeline"),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("Ready to simulate").first()).toBeVisible();
+    await expect(page.getByText("Sample University of Limerick")).toBeVisible();
+    await expect(page.getByText("€3,000.00").first()).toBeVisible();
+
+    // Handle the browser approval confirmation dialog
+    page.once("dialog", async (dialog) => {
+      await dialog.accept();
+    });
+
+    // Approve and simulate
+    const approveBtn = page.getByRole("button", { name: "Approve and simulate" });
+    await expect(approveBtn).toBeEnabled();
+    await approveBtn.click();
+
+    // Latest sandbox action shows APPLIED
+    await expect(
+      page.getByText(/APPLIED · sim_sts_/i),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Current stage:\s*SIMULATED/i)).toBeVisible();
+
+    // Now apply a funding delay (+14 days) to the scholarship
+    // Since tuition is now simulated for 2027-09-10, delaying scholarship to 2027-09-19 triggers an earliest shortfall!
+    const delayCombobox = page.locator("select").nth(1);
+    await delayCombobox.selectOption("14");
+    const applyDelayBtn = page.getByRole("button", { name: "Apply delay" });
+    await expect(applyDelayBtn).toBeEnabled();
+    await applyDelayBtn.click();
+    await expect(page.getByText(/Current stage:\s*SCENARIO_EVALUATED/i)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Earliest shortfall analysis reflects the scenario shortfall
+    await expect(
+      page.getByText(/shortfall on 2027-09-10/i).first(),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Apply a recovery option
+    const applyAssumptionBtn = page.getByRole("button", { name: "Apply assumption" }).first();
+    await expect(applyAssumptionBtn).toBeVisible();
+    await applyAssumptionBtn.click();
+    await expect(page.getByText(/Current stage:\s*RECOVERY_REVIEW/i)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Clear recovery assumption and delay
+    await page.getByRole("button", { name: "Clear recovery assumption" }).click();
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    await page.getByRole("button", { name: "Recalculate deterministically" }).click();
+
+    // Revert latest simulation
+    const revertBtn = page.getByRole("button", { name: "Revert latest simulation" });
+    await expect(revertBtn).toBeEnabled();
+    await revertBtn.click();
+
+    // Status updates to REVERTED
+    await expect(
+      page.getByText(/REVERTED · sim_sts_/i),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Current stage:\s*REVERTED/i)).toBeVisible();
+
+    // Export download button is available
+    const exportBtn = page.getByRole("button", {
+      name: "Download sandbox execution record",
+    });
+    await expect(exportBtn).toBeEnabled();
+
+    expectNoConsoleErrors(errors);
+  });
 });
+

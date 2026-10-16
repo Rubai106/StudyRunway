@@ -929,7 +929,7 @@ describe("S12 — multi-tool task: clarify → chain tools → verify → rechec
       runAgent({ sessionId: sid, message: "check my funding and transfers", provider, tools: [analyze, compare] })
     );
     expect(phases(first)).toEqual(["understanding", "clarifying"]);
-    expect(submitAnswers(sid, "q-cur", { choice: "GBP" }).ok).toBe(true);
+    expect(submitAnswers(sid, "q-cur", { currency: "GBP" }).ok).toBe(true);
 
     const events = await collect(
       runAgent({ sessionId: sid, message: "continuing", provider, tools: [analyze, compare] })
@@ -1030,8 +1030,8 @@ describe("S12 — multi-tool task: clarify → chain tools → verify → rechec
     const clarify = first.find((e) => e.type === "clarify") as {
       questions: { id: string }[];
     };
-    expect(clarify.questions.map((q) => q.id)).toEqual(["demo_sample_budget"]);
-    expect(submitAnswers(sid, "demo_sample_budget", { choice: "Try the sample student budget" }).ok).toBe(
+    expect(clarify.questions.map((q) => q.id)).toEqual(["demo_mode_choice"]);
+    expect(submitAnswers(sid, "demo_mode_choice", { choice: "Try the sample student budget" }).ok).toBe(
       true
     );
     const events = await collect(
