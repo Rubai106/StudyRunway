@@ -61,6 +61,7 @@ const toolTurn = (calls: { id: string; name: string; args: unknown }[]): ChatRes
 });
 
 const UNDERSTANDING = {
+  scope: "student_finance" as const,
   summary: "User wants a runway forecast.",
   keyFacts: [],
   assumptions: [],
@@ -142,6 +143,75 @@ describe("model-driven loop", () => {
     expect(questions[0]?.options).toContain("BDT");
     expect(questions[0]?.options).toContain("EUR");
   });
+
+  it("asks for missing tuition timing figures before calling the provider", async () => {
+    const provider: Provider = {
+      name: "vertex",
+      chat: vi.fn().mockRejectedValue(new Error("provider request timed out after 45000ms")),
+    };
+    const message = "My scholarship may arrive late. Can I still pay tuition on time?";
+    const events = await collect(runAgent({
+      sessionId: "s-tuition-timeout",
+      message,
+      tools: [PING_TOOL],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.find((event) => event.type === "assistant_text")).toMatchObject({
+      text: expect.stringContaining("I can check whether it will be paid on time"),
+    });
+    const clarification = events.find((event) => event.type === "clarify");
+    expect(clarification?.type).toBe("clarify");
+    if (clarification?.type === "clarify") {
+      expect(clarification.questions[0]?.fields?.map((field) => field.name)).toEqual([
+        "tuitionAmount",
+        "currency",
+        "dueDate",
+        "availableFunds",
+        "scholarshipAmount",
+        "scholarshipArrivalDate",
+      ]);
+      expect(clarification.questions[0]?.fields?.find((field) => field.name === "scholarshipArrivalDate")?.required).toBe(false);
+    }
+    expect(getTask("s-tuition-timeout")).toMatchObject({
+      status: "clarifying",
+      originalRequest: message,
+      userGoal: expect.stringContaining("Check whether the listed tuition"),
+    });
+    expect(provider.chat).not.toHaveBeenCalled();
+  });
+
+  it("continues with grounded tuition figures after a transient provider timeout", async () => {
+    const responses = [json(PLAN), textOnly("The check is complete.")];
+    let firstCall = true;
+    const provider: Provider = {
+      name: "vertex",
+      chat: vi.fn(async () => {
+        if (firstCall) {
+          firstCall = false;
+          throw new Error("provider request timed out after 45000ms");
+        }
+        const next = responses.shift();
+        if (!next) throw new Error("scripted provider: response queue exhausted");
+        return next;
+      }),
+    };
+    const events = await collect(runAgent({
+      sessionId: "s-grounded-timeout",
+      message: "My scholarship of USD 3,000 is expected to arrive 2026-11-03. I have USD 2,000 available. My committed tuition bill of USD 5,000 is due 2026-11-01. Can I still pay on time?",
+      tools: [PING_TOOL],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.some((event) => event.type === "clarify")).toBe(false);
+    expect(events.some((event) => event.type === "assistant_text" && event.text.includes("timed out during request classification"))).toBe(true);
+    expect(getTask("s-grounded-timeout")?.status).toBe("done");
+  });
+
   it("runs understand → plan → tools → verify → outcome with exact event shapes", async () => {
     const provider = new ScriptedProvider([
       json(UNDERSTANDING),
@@ -235,9 +305,7 @@ describe("model-driven loop", () => {
       json(UNDERSTANDING),
       json(PLAN),
       toolTurn([{ id: "c1", name: "approval_tool", args: { x: 2 } }]),
-      // second runAgent (resume): fresh understand/plan, no more tool calls
-      json(UNDERSTANDING),
-      json(PLAN),
+      // second runAgent resumes after the approval gate without re-understanding or re-planning
       textOnly("all set"),
       textOnly("Done after your approval."),
     ]);
@@ -392,10 +460,8 @@ describe("model-driven loop", () => {
           ],
         }),
       },
-      json(UNDERSTANDING),
       json(PLAN),
-      textOnly("done"),
-      textOnly("Planned in GBP."),
+      textOnly("I can use GBP for the student-finance plan."),
     ]);
     const first = await collect(
       runAgent({ sessionId: "s-cl", message: "help me plan", tools: [PING_TOOL], provider })
@@ -416,7 +482,7 @@ describe("model-driven loop", () => {
     );
     expectValidEvents(second);
     expect(getTask("s-cl")?.status).toBe("done");
-    expect(second.find((e) => e.type === "result")).toBeDefined();
+    expect(second.find((e) => e.type === "assistant_text")?.type).toBe("assistant_text");
   });
 
   it("stops promptly when the client aborts", async () => {
@@ -616,6 +682,16 @@ describe("demo mode (no provider key)", () => {
     >;
     expect(result.component).toBe("living_cost_plan");
     expect(getTask("s-demo-offer")?.status).toBe("done");
+  });
+
+  it("answers greetings without starting the demo workflow", async () => {
+    const events = await collect(demoRun("s-demo-greeting", "hello there", BUDGET_TOOLS));
+    expectValidEvents(events);
+    expect(events.some((event) => event.type === "clarify")).toBe(false);
+    expect(events.find((event) => event.type === "assistant_text")).toMatchObject({
+      text: expect.stringContaining(DEMO_LABEL),
+    });
+    expect(getTask("s-demo-greeting")).toBeUndefined();
   });
 
   it("emits a labelled error when the budget tool is not registered", async () => {

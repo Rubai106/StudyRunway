@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import { candidatesFromText } from "../extract";
+import { candidatesFromText, hasDocumentPromptInjection, scanForDocumentInjection } from "../extract";
 import { withToolTimeout, zodIssues } from "./common";
 import type { ToolDefinition, ToolResult } from "./types";
 
@@ -26,30 +26,6 @@ export const ExtractDocumentParams = z.object({
     .enum(["invoice", "scholarship_letter", "fee_schedule", "other"])
     .describe("What kind of document this is"),
 });
-
-/**
- * Instruction-like phrases that indicate a prompt-injection attempt when
- * they appear inside untrusted document text. Matched against the raw text
- * before any extraction runs.
- */
-const INJECTION_PATTERNS: { name: string; re: RegExp }[] = [
-  { name: "ignore-instructions", re: /ignore\s+(all\s+|the\s+|these\s+|your\s+)?(previous|prior|above)\s+instructions?/i },
-  { name: "disregard-instructions", re: /disregard\s+(all\s+|the\s+|your\s+)?instructions?/i },
-  { name: "send-money", re: /\bsend\s+(money|funds|cash|payment|payments)\b/i },
-  { name: "transfer-money", re: /\btransfer\s+(money|funds|cash)\s+to\b/i },
-  { name: "wire-money", re: /\bwire\s+(money|funds|cash)\b/i },
-  { name: "role-override", re: /you\s+are\s+now\b/i },
-  { name: "act-as", re: /\bact\s+as\s+(an?\s+)?(assistant|ai|system|admin|root)\b/i },
-  { name: "jailbreak", re: /\bjailbreak\b/i },
-  { name: "system-prompt", re: /\bsystem\s+prompt\b/i },
-  { name: "reveal-instructions", re: /reveal\s+your\s+(system\s+)?(prompt|instructions)/i },
-  { name: "forget-instructions", re: /forget\s+(everything|all)\s+(you\s+know|previous|prior)/i },
-  { name: "do-not-follow", re: /\bdo\s+not\s+(follow|obey)\s+(your\s+)?(instructions|rules|guidelines)/i },
-];
-
-function scanForInjection(text: string): string[] {
-  return INJECTION_PATTERNS.filter((p) => p.re.test(text)).map((p) => p.name);
-}
 
 export const extractDocumentTool: ToolDefinition = {
   name: "extract_document",
@@ -69,9 +45,9 @@ export const extractDocumentTool: ToolDefinition = {
       const { text, documentKind } = parsed.data;
 
       // UNTRUSTED input: screen for embedded instructions before extracting.
-      const probes = scanForInjection(text);
+      const probes = scanForDocumentInjection(text);
       void ctx;
-      if (probes.length > 0) {
+      if (hasDocumentPromptInjection(text)) {
         return {
           ok: false,
           summary:
@@ -100,7 +76,6 @@ export const extractDocumentTool: ToolDefinition = {
       const dateCount = candidates.filter((c) => c.kind === "date").length;
 
       const fields = candidates.map((c) => {
-        const ambiguous = (c.kind === "amount" && amountCount > 1) || (c.kind === "date" && dateCount > 1);
         return {
           label: c.label,
           kind: c.kind,
@@ -109,9 +84,15 @@ export const extractDocumentTool: ToolDefinition = {
           currency: c.currency,
           dateValue: c.dateValue,
           confidence: c.confidence,
-          needsConfirmation: c.confidence !== "high" || ambiguous,
+          // The extractor only proposes candidates. Even a high-confidence
+          // single match must be explicitly reviewed before use in a forecast.
+          needsConfirmation: true,
+          page: c.page,
+          sourceSnippet: c.sourceSnippet,
         };
       });
+
+      const attachedName = text.match(/I've attached the text of ["“]([^"”\r\n]{1,180})["”]/i)?.[1];
 
       const needsCount = fields.filter((f) => f.needsConfirmation).length;
       const summary =
@@ -125,6 +106,7 @@ export const extractDocumentTool: ToolDefinition = {
         summary,
         data: {
           extracted: true,
+          source: attachedName ?? "Attached document text",
           documentKind,
           injectionScreen: "passed — no instruction-like phrases detected",
           fields,

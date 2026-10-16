@@ -7,6 +7,7 @@ import {
   asNumber,
   asString,
   formatMoney,
+  formatMinorMoney,
   isRecord,
 } from "./shared";
 import { formatAssumptionCorrection } from "../chat/answers";
@@ -42,11 +43,20 @@ interface Props {
 }
 
 export default function FinancialOutcome({ data, onCorrectAssumption }: Props) {
-  const verdict = asString(data["verdict"]);
-  const currency = asString(data["currency"]);
-  const deadline = asString(data["deadline"]);
+  const verdict = asString(data["verdict"] ?? data["summary"]);
+  const currency = asString(data["currency"] ?? data["planningCurrency"]);
+  const deadline = asString(data["deadline"] ?? data["gapDate"]);
   const amounts = asArray<Record<string, unknown>>(data["amounts"]);
-  const shortfall = isRecord(data["shortfall"]) ? data["shortfall"] : null;
+  const shortfall = isRecord(data["shortfall"])
+    ? data["shortfall"]
+    : data["hasGap"] === true
+      ? {
+          label: "Projected funding gap",
+          date: asString(data["gapDate"]),
+          amountMinor: asNumber(data["shortfallMinor"]),
+          currency,
+        }
+      : null;
   const assumptions = readAssumptions(data["assumptions"]);
 
   const [correcting, setCorrecting] = useState<string | null>(null);
@@ -109,10 +119,9 @@ export default function FinancialOutcome({ data, onCorrectAssumption }: Props) {
             )}
           </span>
           <span className="text-base font-bold tabular-nums text-[var(--sr-amber)]">
-            {formatMoney(
-              asNumber(shortfall["amount"]),
-              asString(shortfall["currency"], currency),
-            )}
+            {shortfall["amountMinor"] !== undefined
+              ? formatMinorMoney(asNumber(shortfall["amountMinor"]), asString(shortfall["currency"], currency))
+              : formatMoney(asNumber(shortfall["amount"]), asString(shortfall["currency"], currency))}
           </span>
         </div>
       )}

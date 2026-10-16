@@ -30,8 +30,9 @@ is an async generator yielding typed `AgentEvent`s (see §5). Phases, in order:
    server-side at execution time, and compares summaries. Match → `verified:
    true`; mismatch → figures are flagged provisional.
 6. **Outcome** — the model composes a verdict-first summary (every figure must
-   come from tool results), then a `result` event carries the structured
-   component payload, evidence, assumptions, and the tool-call log.
+   come from tool results), then a `result` event carries the selected tool's
+   transient structured data together with evidence, assumptions, and the
+   tool-call log. Tool data is not copied into persistent server task state.
 
 Failure handling: arg validation errors, timeouts, and tool errors become
 `tool_call_end` events with `ok: false` — never a fabricated success. One
@@ -61,31 +62,43 @@ Per-session `TaskState`, kept **in memory on the server** (a `Map`; no DB):
 used by POST `/api/agent/answer` for both clarification answers and
 Approve/Deny decisions.
 
+## 2.1 Audit events (`src/lib/agent/audit.ts`)
+
+The server emits one-line JSON audit records for agent turns, clarification
+requests and submissions, approval decisions, tool outcomes, and task deletion.
+Records use the opaque server-generated task ID for correlation. They exclude
+session IDs, prompts, answer values, document contents, tool arguments/results,
+provider error bodies, and credentials. On Google Cloud, stdout records can be
+ingested by Cloud Logging; retention, access controls, and export destinations
+must be configured on the deployment. Local stdout alone is not durable or
+tamper-evident storage.
+
 ## 3. Provider adapters (`src/lib/providers/`)
 
 `Provider` interface: `chat(messages, toolSchemas) → { text, toolCalls,
-stopReason }`. Adapters: **xAI (Grok, primary)** via the OpenAI-compatible
-`/chat/completions` wire format, **OpenAI**, **Anthropic** (messages API with
-tool_use blocks). `selectProvider()` picks xAI → OpenAI → Anthropic by which
-`*_API_KEY` env var is set; returns `null` when none is configured. All JSON
-parsing of model output goes through `zodjson.ts` (strip code fences, one
-correction retry). **API keys live only in server-side env vars**; the
-frontend never sees them (the status endpoint returns the literal string
-`"<redacted>"` for the Authorization header in tests, and the real adapters
-never log keys).
+stopReason }`. Adapters: **xAI (Grok, primary)**, **Vertex AI Gemini** via the
+Google Cloud OpenAI-compatible endpoint and Application Default Credentials,
+**Google AI Studio Gemini** via Google's API-key endpoint, **OpenAI**, and
+**Anthropic** (messages API with tool_use blocks). `selectProvider()` prefers
+xAI → Vertex AI → Gemini → OpenAI → Anthropic when no provider is explicitly
+selected. All JSON parsing of model output goes through `zodjson.ts` (strip
+code fences, one correction retry). Credentials stay server-side; the frontend
+only receives provider/model labels from the status endpoint.
 
-> Provider model IDs are placeholders in this repo (`.env.example` uses
-> `PLACEHOLDER`); the default xAI model id in code is `grok-4.7`, unverified
-> against a live account in this environment.
+> Provider model availability depends on the configured account/project. The
+> Vertex default is `google/gemini-3.5-flash`; it has not been called against a
+> live project in this environment.
 
 ## 4. Tool registry (`src/lib/agent/registry.ts`, `src/lib/tools/`)
 
 - The registry merges a hidden `__ping` self-test tool (used by agent-core
-  tests and demo mode; **excluded from `getModelTools()`** so the model never
-  sees it) with the seven financial tools in `src/lib/tools/TOOLS`:
+  tests; **excluded from `getModelTools()`** so the model never sees it) with
+  the eight financial tools in `src/lib/tools/TOOLS`:
   `analyze_funding_gap`, `compare_transfers`, `extract_document`,
-  `simulate_scenario`, `research_policy` (honest no-live-data stub),
-  `build_action_plan`, `draft_email` (requires approval; draft only, never sends).
+  `simulate_scenario`, `research_policy` (Vertex AI Gemini + Google Search
+  grounding, with an official-domain citation gate),
+  `build_action_plan`, `draft_email` (requires approval; draft only, never
+  sends), and `build_living_cost_plan` (source-backed destination budget).
 - Every tool satisfies the `ToolDefinition` contract (`src/lib/agent/tools.ts`):
   zod `parameters` schema, `handler(args, ctx) → ToolResult`, `ok / summary /
   data / evidence`. Args are validated **before** the handler runs
@@ -94,12 +107,38 @@ never log keys).
   deterministic engine in minor units (`money.ts`, `forecast.ts`,
   `transfers.ts`, `scenarios.ts`, `extract.ts`): no tool invents financial
   figures, rates, or quotes.
+- `ReminderCenter` is available in the chat header. Action-plan items can open
+  it with a suggested title; the user chooses the local reminder time and
+  explicitly saves it. Reminders live in browser `localStorage`; optional
+  generic browser notifications fire once while the app is open and never
+  expose the reminder title on the lock screen.
 - `compare_transfers` compares the engine's **sample/reference quotes only**;
   every figure is labelled `"reference estimate — not a live quote"`, the
   quote timestamp is `"sample data"`, missing fees are never treated as zero
   (such quotes are excluded from ranking), and ranking follows the caller's
   objective (`min_total_cost | fastest | balanced`) while quotes that would
   miss the deadline are excluded with a reason.
+- Transfer comparisons carry a period-labeled World Bank RPW benchmark for
+  context; it is never presented as a live quote or used to fabricate a
+  provider's fees or exchange rate. `TransferComparison` also has a local form
+  for details the user reads from provider quotes: exchange rate, fee treatment,
+  recipient charges, quote date, delivery window, and send limits. It ranks
+  only complete quotes that meet the deadline, by amount received, sender cost,
+  or speed. Entered quote values are not saved, sent, or independently verified.
+  With no provider configured, the app still has no automatic feed of live
+  transfer fees, recipient charges, delivery times, or limits.
+- `simulate_scenario` can compare up to eight user-stated recovery options
+  (additional funding or a tuition installment), each independently against
+  the stressed forecast. It reports the remaining gap and labels funding
+  availability and university approval as unconfirmed assumptions.
+- `build_action_plan` orders actions by urgency derived from explicit dates,
+  then by the action category. Missing deadlines are marked unknown.
+- Document text and PDF pages are extracted locally. The request includes only
+  bounded candidate values plus page-tagged, identifier-redacted excerpts;
+  the transcript stores an attachment summary rather than the document text.
+  Attachment turns can call only `extract_document`, so unconfirmed candidates
+  cannot reach a financial calculation. Document review values and their
+  assistant summary stay in the active view and are not persisted to localStorage.
 
 ## 5. SSE event protocol
 
@@ -115,7 +154,7 @@ both unit tests and the mocked E2E suite:
 | `tool_call_end` | `{ id, tool, ok, summary, durationMs }` |
 | `assistant_text` | `{ text }` |
 | `clarify` | `{ questions: ClarifyQuestion[] }` — kinds: `quick_replies \| date \| amount \| currency \| form` |
-| `result` | `{ component, data }` — components: `financial_outcome \| transfer_comparison \| scenario_comparison \| action_plan \| document_review \| draft_email` |
+| `result` | `{ component, data }` — components include `financial_outcome \| transfer_comparison \| scenario_comparison \| action_plan \| document_review \| policy_research \| draft_email \| living_cost_plan \| safe_to_send_decision` |
 | `error` | `{ message, recoverable }` |
 
 `src/lib/events.ts` is the shared event-bus type module used by the UI.
@@ -152,7 +191,7 @@ No synthetic, scripted, or decorative nodes are ever rendered. Consequences:
 
 ## 8. Demo mode
 
-When `selectProvider()` finds no API key, `runAgent` runs `runDemoFlow`
+When `selectProvider()` finds no provider credentials/configuration, `runAgent` runs `runDemoFlow`
 instead of the model loop: the same structured phases
 (understand → clarify → plan → tools → verify → outcome) execute against the
 real registry and real `executeToolCall` path — now running the REAL
@@ -177,7 +216,9 @@ the same). Demo mode is fully offline — the engine and dataset are local.
   `wipeStudyRunwayData()`, which removes **every** `studyrunway.*` key and
   starts a fresh session.
 - Documents uploaded for `extract_document` are processed in memory and are
-  not retained beyond the session state.
+  not retained in full. The bounded, redacted excerpts sent for extraction may
+  remain in server task memory until the task is deleted or the process stops;
+  unconfirmed document-review cards are not copied into browser localStorage.
 
 ## 10. Destination budget planner — data flow
 
@@ -223,7 +264,7 @@ src/lib/livingCosts/ — the deterministic engine
             POST /api/agent/budget-revert; the component requires explicit
             user confirmation (approval-gate UX pattern) before calling apply.
 
-Demo wiring: runDemoFlow() (no provider key) calls
+Demo wiring: runDemoFlow() (no provider credentials) calls
 executeToolCall("build_living_cost_plan", DEMO_SAMPLE_ARGS) through the real
 registry, verifies by deterministic re-run, and returns the living_cost_plan
 component with demoMode:true. The hidden __ping tool is not used in the demo

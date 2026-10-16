@@ -32,14 +32,14 @@ export const ClarifyQuestionSchema = z.object({
   id: z.string().min(1).max(80),
   kind: z.enum(["quick_replies", "date", "amount", "currency", "form"]),
   prompt: z.string().min(1).max(600),
-  options: z.array(z.string().max(120)).max(10).optional(),
+  options: z.array(z.string().max(120)).max(40).optional(),
   fields: z
     .array(
       z.object({
         name: z.string().min(1).max(60),
         label: z.string().min(1).max(120),
         type: z.enum(["text", "number", "date", "select"]),
-        options: z.array(z.string().max(120)).max(10).optional(),
+        options: z.array(z.string().max(120)).max(40).optional(),
         required: z.boolean(),
       })
     )
@@ -133,6 +133,8 @@ const SafeToSendStateSchema = z.object({
 export const TaskStateSchema = z.object({
   taskId: z.string().min(1),
   sessionId: z.string().min(1),
+  /** Original user request retained so clarification resumes do not lose intent. */
+  originalRequest: z.string().max(4000).default(""),
   userGoal: z.string().max(2000).default(""),
   confirmedFacts: z.array(FactSchema).default([]),
   /** Model/user hypotheses, always labelled as unconfirmed. */

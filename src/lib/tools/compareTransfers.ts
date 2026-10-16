@@ -31,6 +31,18 @@ import type { ToolDefinition, ToolResult } from "./types";
 export const REFERENCE_ESTIMATE_LABEL = "reference estimate — not a live quote";
 export const SAMPLE_TIMESTAMP = "sample data";
 
+/** World Bank RPW industry context; this is a benchmark, never a provider quote. */
+export const WORLD_BANK_REMITTANCE_BENCHMARK = {
+  source: "The World Bank, Remittance Prices Worldwide",
+  sourceUrl: "https://remittanceprices.worldbank.org/sites/default/files/2026-04/RPW_main_report_and_annex_Q325.pdf",
+  referencePeriod: "Q3 2025",
+  reportedAmountUsdMinor: 20_000,
+  globalAverageTotalCostPercent: 6.36,
+  globalDigitalAveragePercent: 4.59,
+  checkedAt: "2026-10-16",
+  attribution: "The World Bank, Remittance Prices Worldwide, available at http://remittanceprices.worldbank.org",
+} as const;
+
 const OBJECTIVES = ["min_total_cost", "fastest", "balanced"] as const;
 
 export const CompareTransfersParams = z.object({
@@ -105,6 +117,7 @@ export const compareTransfersTool: ToolDefinition = {
             figureLabel: REFERENCE_ESTIMATE_LABEL,
             quoteTimestamp: SAMPLE_TIMESTAMP,
             fxSource: SAMPLE_FX_SOURCE,
+            worldBankBenchmark: WORLD_BANK_REMITTANCE_BENCHMARK,
           },
           evidence: [{
             label: REFERENCE_ESTIMATE_LABEL,
@@ -258,6 +271,7 @@ export const compareTransfersTool: ToolDefinition = {
           figureLabel: REFERENCE_ESTIMATE_LABEL,
           quoteTimestamp: SAMPLE_TIMESTAMP,
           fxSource: SAMPLE_FX_SOURCE,
+          worldBankBenchmark: WORLD_BANK_REMITTANCE_BENCHMARK,
           ranked,
           excluded,
         },

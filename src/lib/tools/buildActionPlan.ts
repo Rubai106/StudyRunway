@@ -2,7 +2,7 @@
  * build_action_plan — prioritized action plan from the deterministic engine.
  *
  * Uses the engine's export.ts action-plan builder (buildActionPlan) and the
- * forecast, then derives PRIORITIZED ACTIONS with deterministic rules:
+ * forecast, then derives ACTIONS with deterministic rules:
  *
  * 1. Close the funding gap (if any) — highest priority, impact = shortfall.
  * 2. Confirm uncertain funding (conditional/estimated/unverified sources).
@@ -11,7 +11,8 @@
  * 5. Prepare for upcoming obligations, soonest first.
  *
  * Every action carries purpose, deadline, evidence refs, and an estimated
- * impact — all computed, none invented.
+ * impact — all computed, none invented. Sorting uses urgency from confirmed
+ * dates first, then the category priority as a tie-breaker.
  */
 
 import { z } from "zod";
@@ -38,6 +39,9 @@ export const BuildActionPlanParams = z.object({
 
 export interface PrioritizedAction {
   priority: number;
+  urgency?: "critical" | "high" | "medium" | "unknown";
+  urgencyReason?: string;
+  daysUntilDeadline?: number | null;
   title: string;
   purpose: string;
   deadline: string | null;
@@ -160,17 +164,37 @@ export const buildActionPlanTool: ToolDefinition = {
         });
       }
 
-      // Priority, then earliest deadline, then title for determinism.
+      // Urgency and earliest confirmed deadline come before category priority.
+      for (const action of actions) {
+        if (!action.deadline) {
+          action.urgency = "unknown";
+          action.daysUntilDeadline = null;
+          action.urgencyReason = "No verified deadline is attached to this action.";
+          continue;
+        }
+        const days = Math.floor((Date.parse(`${action.deadline}T00:00:00Z`) - Date.parse(`${f.today}T00:00:00Z`)) / 86_400_000);
+        action.daysUntilDeadline = days;
+        action.urgency = days <= 7 ? "critical" : days <= 30 ? "high" : "medium";
+        action.urgencyReason = days < 0
+          ? `Deadline passed ${Math.abs(days)} day(s) ago.`
+          : days === 0
+            ? "Due today."
+            : `Due in ${days} day(s).`;
+      }
+
+      // Closest confirmed deadline comes first. Category priority breaks ties.
       actions.sort((a, b) =>
-        a.priority !== b.priority
-          ? a.priority - b.priority
+        urgencyOrder(a.urgency) !== urgencyOrder(b.urgency)
+          ? urgencyOrder(a.urgency) - urgencyOrder(b.urgency)
           : (a.deadline ?? "9999-12-31") < (b.deadline ?? "9999-12-31")
             ? -1
             : (a.deadline ?? "9999-12-31") > (b.deadline ?? "9999-12-31")
               ? 1
-              : a.title < b.title
-                ? -1
-                : 1,
+              : a.priority !== b.priority
+                ? a.priority - b.priority
+                : a.title < b.title
+                  ? -1
+                  : 1,
       );
 
       const top = actions[0];
@@ -194,7 +218,7 @@ export const buildActionPlanTool: ToolDefinition = {
             label: "Engine-built action plan",
             detail:
               "Derived from the deterministic buildActionPlan() + buildForecast() output. " +
-              "Priorities follow fixed rules (gap > uncertain funding > missing data > evidence issues > upcoming obligations); nothing was invented.",
+              "Urgency is based on the confirmed deadline; category priority breaks ties after urgency and date. Nothing was invented.",
           },
           ...(parsed.data.gapSummary
             ? [{ label: "Gap summary anchor", detail: "The supplied gap summary was recorded with the plan (input, not recomputed)." }]
@@ -203,3 +227,7 @@ export const buildActionPlanTool: ToolDefinition = {
       };
     }),
 };
+
+function urgencyOrder(urgency: PrioritizedAction["urgency"]): number {
+  return urgency === "critical" ? 0 : urgency === "high" ? 1 : urgency === "medium" ? 2 : 3;
+}

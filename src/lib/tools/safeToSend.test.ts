@@ -87,14 +87,10 @@ describe("safe-to-send deterministic action invariants", () => {
     expect(appliedCount).toBe(1);
 
     // Change material inputs; the old approval should still be stale.
-    const delayed = await runSafeToSendAction(sid, "set_delay_scenario", {
-      scenario: {
-        mode: "delay",
-        fundingId: "fund-scholarship",
-        revisedExpectedDate: "2026-10-28",
-      },
+    const changed = await runSafeToSendAction(sid, "upsert_draft", {
+      patch: { tuitionDueDate: "2026-10-28" },
     });
-    expect(delayed.ok).toBe(true);
+    expect(changed.ok).toBe(true);
 
     const stale = await runSafeToSendAction(sid, "simulate", approval);
     expect(stale.ok).toBe(false);
@@ -194,7 +190,7 @@ describe("safe-to-send deterministic action invariants", () => {
     expect(committedInsurance?.status).toBe("committed");
   });
 
-  it("exercises workflow stage machine transitions through full scenario lifecycle", async () => {
+  it("keeps the Safe-to-Send workflow focused on baseline decisions and sandbox actions", async () => {
     const sid = "sts_stage_machine";
     seedHighHeadroomPlan(sid);
 
@@ -209,34 +205,19 @@ describe("safe-to-send deterministic action invariants", () => {
     expect(loaded.ok).toBe(true);
     expect((loaded.data as Record<string, unknown>)["workflowStage"]).toBe("AWAITING_APPROVAL");
 
-    // Step 3: Apply delay scenario -> SCENARIO_EVALUATED
-    const delayed = await runSafeToSendAction(sid, "set_delay_scenario", {
-      scenario: {
-        mode: "delay",
-        fundingId: "fund-scholarship",
-        revisedExpectedDate: "2027-09-15",
-      },
-    });
-    expect(delayed.ok).toBe(true);
-    expect((delayed.data as Record<string, unknown>)["workflowStage"]).toBe("SCENARIO_EVALUATED");
+    // Delay/recovery stay in the existing simulate_scenario planner.
+    for (const action of [
+      "set_delay_scenario",
+      "clear_delay_scenario",
+      "apply_recovery_assumption",
+      "clear_recovery_assumption",
+    ]) {
+      const result = await runSafeToSendAction(sid, action, {});
+      expect(result.ok).toBe(false);
+      expect(result.summary).toContain("Unknown safe-to-send action");
+    }
 
-    // Step 4: Apply recovery assumption -> RECOVERY_REVIEW
-    const recovered = await runSafeToSendAction(sid, "apply_recovery_assumption", {
-      assumption: {
-        id: "rec-test",
-        label: "Test recovery",
-        type: "extra_inflow",
-        amountMinor: 50_000,
-        currency: "BDT",
-        effectiveDate: "2027-09-08",
-      },
-    });
-    expect(recovered.ok).toBe(true);
-    expect((recovered.data as Record<string, unknown>)["workflowStage"]).toBe("RECOVERY_REVIEW");
-
-    // Step 5: Clear delay & recovery, recalculate -> back to AWAITING_APPROVAL
-    await runSafeToSendAction(sid, "clear_delay_scenario", {});
-    await runSafeToSendAction(sid, "clear_recovery_assumption", {});
+    // Recalculate the baseline decision before the explicit sandbox simulation.
     const recalc = await runSafeToSendAction(sid, "recalculate", {});
     expect(recalc.ok).toBe(true);
     expect((recalc.data as Record<string, unknown>)["workflowStage"]).toBe("AWAITING_APPROVAL");

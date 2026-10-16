@@ -1,4 +1,10 @@
-# StudyRunway — Implementation Review (PART A)
+# StudyRunway — Implementation Review (Historical Baseline)
+
+> **Status:** This review records the repository as inspected on 2026-10-15.
+> It is not the current feature inventory: several items described below as
+> planned or incomplete were implemented afterward. Read
+> `ARCHITECTURE.md`, `FEATURE_STATUS.md`, and `LIMITATIONS.md` for the current
+> state. The historical notes remain below for audit context.
 
 Inspection of `studyrunway-agent/` as of 2026-10-15. Written by the
 implementation-review pass. Every claim below was read from the file cited —
@@ -280,8 +286,10 @@ component** (`living_cost_plan`):
    during initial review. The current patched `runDemoFlow` executes the real
    `build_living_cost_plan` tool and renders its result with a deterministic
    demo label; current runtime verification remains blocked by npm registry DNS.
-8. **`research_policy` is an honest stub** (returns `answer: null`,
-   "unverified — user must confirm") — cannot verify policy claims.
+8. **Policy research is implemented but not live-verified.** Vertex Gemini
+   Google Search grounding returns citations and a checked-at time only when
+   sources pass an official-domain gate. Deterministic mock coverage exists;
+   no authenticated request against the user's Vertex project has been run.
 9. **`npm audit` remains unverified for the patched release** — npm registry DNS
    returned `EAI_AGAIN registry.npmjs.org`; rerun on a network-enabled machine.
 10. **Dead code:** `src/lib/agent.ts` is not imported anywhere.

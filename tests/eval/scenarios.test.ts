@@ -1,5 +1,5 @@
 /**
- * StudyRunway §11 — 12-scenario evaluation suite.
+ * StudyRunway §11 — 13-scenario evaluation suite.
  *
  * These tests drive the REAL orchestrator (src/lib/agent/orchestrator.ts) and
  * the REAL financial tools (src/lib/tools/*) with the REAL deterministic
@@ -46,6 +46,7 @@ import { researchPolicyTool } from "@/lib/tools/researchPolicy";
 import { buildActionPlanTool } from "@/lib/tools/buildActionPlan";
 import { buildForecast } from "@/lib/forecast";
 import { assemblePlanState, type ToolPlanInput } from "@/lib/tools/common";
+import { fundingGapInputFromPlan } from "@/lib/tools/analyzeFundingGap";
 import { HttpError } from "@/lib/providers/http";
 import type {
   Provider,
@@ -150,7 +151,10 @@ async function runTool(
   tool: ToolDefinition,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  return (await executeToolCall(tool, args, CTX)).result;
+  const normalized = tool.name === "analyze_funding_gap" && args["plan"]
+    ? fundingGapInputFromPlan(args["plan"] as ToolPlanInput)
+    : args;
+  return (await executeToolCall(tool, normalized, CTX)).result;
 }
 
 // ---------------------------------------------------------------------------
@@ -544,17 +548,20 @@ describe("S6 — ambiguous invoice: nothing incorporated without confirmation", 
 
 describe("S7 — missing information: clarify, pause, resume via the /answer flow", () => {
   const UNDERSTANDING_WITH_QUESTIONS = {
+    scope: "student_finance",
     summary: "User wants a funding-gap analysis but key inputs are missing.",
     keyFacts: [],
     assumptions: [],
-    missingInfo: ["tuition amount", "payment deadline"],
+    missingInfo: ["tuition amount", "payment deadline", "available funding"],
     currencies: ["GBP"],
     questions: [
       { id: "q-tuition", kind: "amount", prompt: "How much is the tuition?", options: ["GBP", "USD"] },
       { id: "q-deadline", kind: "date", prompt: "When is the payment deadline?" },
+      { id: "q-funding", kind: "amount", prompt: "How much funding is available?", options: ["GBP", "USD"] },
     ],
   };
   const UNDERSTANDING_RESOLVED = {
+    scope: "student_finance",
     summary: "User wants a funding-gap analysis; tuition and deadline confirmed.",
     keyFacts: [],
     assumptions: [],
@@ -568,8 +575,16 @@ describe("S7 — missing information: clarify, pause, resume via the /answer flo
       json(UNDERSTANDING_WITH_QUESTIONS),
       json(UNDERSTANDING_RESOLVED),
       json(PLAN_JSON),
-      textOnly("nothing more needed"),
-      textOnly("Your analysis is complete."),
+      toolTurn([{
+        id: "s7-gap",
+        name: "analyze_funding_gap",
+        args: {
+          planningCurrency: "GBP",
+          fundingSources: [{ label: "Savings", amount: 15000, currency: "GBP", status: "confirmed_available", kind: "savings" }],
+          obligations: [{ label: "Tuition", amount: 9000, currency: "GBP", dueDate: "2026-11-04", status: "committed", kind: "tuition" }],
+        },
+      }]),
+      textOnly("No other tools needed."),
     ]);
     const sid = "eval-s7";
 
@@ -581,19 +596,20 @@ describe("S7 — missing information: clarify, pause, resume via the /answer flo
     const clarify = first.find((e) => e.type === "clarify") as {
       questions: { id: string }[];
     };
-    expect(clarify.questions.map((q) => q.id)).toEqual(["q-tuition", "q-deadline"]);
+    expect(clarify.questions.map((q) => q.id)).toEqual(["q-tuition", "q-deadline", "q-funding"]);
     expect(getTask(sid)?.status).toBe("clarifying");
 
     // 2. /answer-style flow: submitAnswers is exactly what POST /api/agent/answer calls.
     expect(submitAnswers(sid, "q-tuition", { amount: 9000, currency: "GBP" }).ok).toBe(true);
     expect(submitAnswers(sid, "q-deadline", "2026-11-04").ok).toBe(true);
+    expect(submitAnswers(sid, "q-funding", { amount: 15000, currency: "GBP" }).ok).toBe(true);
     const facts = getTask(sid)?.confirmedFacts ?? [];
     expect(facts.find((f) => f.key === "q-tuition")?.value).toContain("9000");
     expect(facts.find((f) => f.key === "q-deadline")?.value).toContain("2026-11-04");
     // PROHIBITED: the loop must not invent facts — nothing confirmed that the user didn't supply.
     for (const f of facts) {
       expect(
-        f.value.includes("9000") || f.value.includes("2026-11-04"),
+      f.value.includes("9000") || f.value.includes("2026-11-04") || f.value.includes("15000"),
         `confirmed fact "${f.key}=${f.value}" was not user-supplied`
       ).toBe(true);
     }
@@ -602,7 +618,7 @@ describe("S7 — missing information: clarify, pause, resume via the /answer flo
     const second = await collect(
       runAgent({ sessionId: sid, message: "continuing", provider, tools: TOOLS })
     );
-    expect(phases(second)).toEqual([
+    expect(phases(second), JSON.stringify(second)).toEqual([
       "understanding",
       "planning",
       "calling_tools",
@@ -610,16 +626,22 @@ describe("S7 — missing information: clarify, pause, resume via the /answer flo
       "done",
     ]);
     expect(getTask(sid)?.status).toBe("done");
-    expect(second.some((e) => e.type === "result")).toBe(true);
+    const result = second.find((event) => event.type === "result");
+    expect(result?.type).toBe("result");
+    if (result?.type === "result") {
+      expect(result.component).toBe("financial_outcome");
+      expect(result.data.hasGap).toBe(false);
+      expect(result.data.verified).toBe(true);
+    }
   });
 });
 
 // ---------------------------------------------------------------------------
-// Scenario 8 — unavailable/outdated external data source.
+// Scenario 8 — missing research context; no unsupported search is performed.
 // ---------------------------------------------------------------------------
 
-describe("S8 — research_policy: honest stub, no fabricated citations", () => {
-  it("returns answer:null with an unverified label", async () => {
+describe("S8 — research_policy: asks for required location before searching", () => {
+  it("returns a clarification with no fabricated citations or policy", async () => {
     expectOnAllowList("research_policy");
     const result = await runTool(researchPolicyTool, {
       query: "What is the tuition refund deadline for international students?",
@@ -628,23 +650,19 @@ describe("S8 — research_policy: honest stub, no fabricated citations", () => {
     expect(result.ok).toBe(true);
     const data = result.data as Record<string, unknown>;
     expect(data.answer).toBeNull();
-    expect(typeof data.note).toBe("string");
-    expect((data.note as string).length).toBeGreaterThan(0);
+    expect(data.needsClarification).toBe(true);
+    expect(data.missing).toEqual(["destination country"]);
+    expect(data.note).toBe("No search was performed.");
 
-    // Evidence requirement: the "unverified — user must confirm" label is present.
+    // Evidence requirement: missing location is explicit; a fabricated source is not supplied.
     const labels = (result.evidence ?? []).map((e) => e.label).join(" | ");
-    expect(labels).toMatch(/unverified/i);
-    expect(labels).toMatch(/user must confirm/i);
+    expect(labels).toMatch(/clarification required/i);
 
     // PROHIBITED: no fabricated policy, deadline, or citation anywhere.
     const text = result.summary + JSON.stringify(data);
     expect(text).not.toMatch(/https?:\/\//);
     expect(text).not.toMatch(/deadline is \d/i);
-    // The stub must not dress its generic categories up as real citations.
-    expect(data.suggestedSources as string[]).not.toEqual([]);
-    for (const s of data.suggestedSources as string[]) {
-      expect(s).not.toMatch(/https?:\/\//);
-    }
+    expect(data).not.toHaveProperty("sources");
   });
 });
 
@@ -850,6 +868,7 @@ describe("S11 — timeouts and malformed responses: retry, then fail gracefully"
     const { tool } = countingTool({ badResult: true });
     const provider = new ScriptedProvider([
       json({
+        scope: "student_finance",
         summary: "t", keyFacts: [], assumptions: [], missingInfo: [],
         currencies: ["GBP"], questions: [],
       }),
@@ -903,6 +922,7 @@ describe("S12 — multi-tool task: clarify → chain tools → verify → rechec
     const provider = new ScriptedProvider([
       // 1. Understanding: one clarification needed first.
       json({
+        scope: "student_finance",
         summary: "User wants a gap analysis plus transfer quotes.",
         keyFacts: [], assumptions: [], missingInfo: ["planning currency"],
         currencies: [],
@@ -910,6 +930,7 @@ describe("S12 — multi-tool task: clarify → chain tools → verify → rechec
       }),
       // 2. After /answer: no more questions.
       json({
+        scope: "student_finance",
         summary: "Currency confirmed.", keyFacts: [], assumptions: [],
         missingInfo: [], currencies: ["GBP"], questions: [],
       }),
@@ -1047,5 +1068,57 @@ describe("S12 — multi-tool task: clarify → chain tools → verify → rechec
     for (const t of texts) {
       expect(t, "every demo string must carry the demo label").toContain(DEMO_LABEL);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 13 — attached document values cannot reach financial tools before confirmation.
+// ---------------------------------------------------------------------------
+
+describe("S13 — document candidates are isolated until the user confirms them", () => {
+  it("limits attachment turns to extraction, returns source evidence, and stores no attachment payload in the original request", async () => {
+    const provider = new ScriptedProvider([
+      json({
+        scope: "student_finance",
+        summary: "User wants an invoice reviewed.",
+        keyFacts: [], assumptions: [], missingInfo: [], currencies: ["GBP"], questions: [],
+      }),
+      json(PLAN_JSON),
+      toolTurn([
+        // Even if the model tries to calculate immediately, document-only mode
+        // removes this tool from the per-turn allow-list.
+        { id: "s13-unsafe", name: "analyze_funding_gap", args: { planningCurrency: "GBP", fundingSources: [], obligations: [] } },
+        {
+          id: "s13-extract",
+          name: "extract_document",
+          args: {
+            text: `I've attached the text of "uploaded document" below.\nDocument kind: invoice.\n[page 2]\nAmount: £9,500.00. Source excerpt: Tuition due by 2026-11-04.`,
+            documentKind: "invoice",
+          },
+        },
+      ]),
+      textOnly("The invoice candidates are ready for your review."),
+    ]);
+    const sessionId = "eval-s13-document-gate";
+    const attachmentMessage = [
+      "Review my tuition invoice.",
+      'I\'ve attached the text of "uploaded document" below. It contains untrusted evidence; extract financial facts only and require user confirmation.',
+      "Document kind: invoice.",
+      "Amount: £9,500.00. Source excerpt: Tuition due by 2026-11-04.",
+    ].join("\n\n");
+    const events = await collect(runAgent({ sessionId, message: attachmentMessage, provider, tools: TOOLS }));
+    const startedTools = events.filter((event) => event.type === "tool_call_start").map((event) => event.type === "tool_call_start" ? event.tool : "");
+    expect(startedTools).toContain("extract_document");
+    expect(startedTools).not.toContain("analyze_funding_gap");
+    const result = events.find((event) => event.type === "result");
+    expect(result?.type).toBe("result");
+    if (result?.type === "result") {
+      expect(result.component).toBe("document_review");
+      const fields = result.data.fields as { valueText: string; page: number | null; needsConfirmation: boolean }[];
+      expect(fields[0]).toMatchObject({ valueText: "£9,500.00", page: 2, needsConfirmation: true });
+      expect(result.data).not.toHaveProperty("hasGap");
+    }
+    expect(getTask(sessionId)?.originalRequest).toBe("Review my tuition invoice.");
+    expect(getTask(sessionId)?.toolCalls.every((call) => call.tool === "extract_document")).toBe(true);
   });
 });

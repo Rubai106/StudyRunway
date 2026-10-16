@@ -19,12 +19,6 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function addDays(date: string, days: number): string {
-  const [y, m, d] = date.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d + days));
-  return dt.toISOString().slice(0, 10);
-}
-
 function tone(status: string): { label: string; cls: string } {
   switch (status) {
     case "READY_TO_SIMULATE":
@@ -60,9 +54,6 @@ export default function SafeToSendDecision({
   const [cardData, setCardData] = useState<Record<string, unknown>>(data);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [delayFundingId, setDelayFundingId] = useState<string>("");
-  const [delayDays, setDelayDays] = useState<string>("7");
-  const [customDate, setCustomDate] = useState<string>("");
   const [downloadBusy, setDownloadBusy] = useState(false);
 
   useEffect(() => setCardData(data), [data]);
@@ -104,9 +95,6 @@ export default function SafeToSendDecision({
 
   const timeline = isRecord(decision["timeline"]) ? decision["timeline"] : {};
   const baseline = isRecord(timeline["baseline"]) ? timeline["baseline"] : null;
-  const scenario = isRecord(timeline["scenario"]) ? timeline["scenario"] : null;
-  const selectedRecovery = isRecord(timeline["selectedRecovery"]) ? timeline["selectedRecovery"] : null;
-  const recoveryOptions = asArray<Record<string, unknown>>(timeline["recoveryOptions"]);
 
   const reasons = asArray<Record<string, unknown>>(decision["reasons"]);
   const warnings = asArray<string>(decision["warnings"]);
@@ -118,45 +106,13 @@ export default function SafeToSendDecision({
     : null;
 
   const fundingRecords = asArray<Record<string, unknown>>(draft["fundingRecords"]);
-  const delayCandidates = fundingRecords.filter((f) => asString(f["status"]) !== "RECEIVED");
   const workflowStage = asString(cardData["workflowStage"], "INTAKE");
   const events = asArray<Record<string, unknown>>(cardData["events"]);
 
-  useEffect(() => {
-    if (!delayFundingId && delayCandidates.length > 0) {
-      setDelayFundingId(asString(delayCandidates[0]?.["id"]));
-    }
-  }, [delayFundingId, delayCandidates]);
-
   const timelineRows = useMemo(() => {
-    const active = scenario ?? baseline;
-    if (!active) return [] as Record<string, unknown>[];
-    return asArray<Record<string, unknown>>(active["events"]);
-  }, [baseline, scenario]);
-
-  const applyDelay = async () => {
-    const base = fundingRecords.find((f) => asString(f["id"]) === delayFundingId);
-    if (!base) return;
-    const expectedDate = asString(base["expectedDate"]);
-    const revised =
-      delayDays === "custom"
-        ? customDate
-        : expectedDate
-          ? addDays(expectedDate, Number(delayDays))
-          : "";
-    if (!revised) {
-      setError("Provide a valid revised date for the delay scenario.");
-      return;
-    }
-    await action("set_delay_scenario", {
-      scenario: {
-        mode: "delay",
-        fundingId: delayFundingId,
-        revisedExpectedDate: revised,
-        note: "Hypothetical delay scenario",
-      },
-    });
-  };
+    if (!baseline) return [] as Record<string, unknown>[];
+    return asArray<Record<string, unknown>>(baseline["events"]);
+  }, [baseline]);
 
   const statusIsReady = status === "READY_TO_SIMULATE";
 
@@ -260,119 +216,16 @@ export default function SafeToSendDecision({
         </div>
       </dl>
 
-      <div className="rounded-xl border border-[var(--sr-line)] bg-white/50 p-3 text-xs">
-        <p className="font-semibold text-[var(--sr-ink)]">Funding delay scenario</p>
-        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <select
-            className="rounded-lg border border-[var(--sr-line)] px-2 py-1.5"
-            value={delayFundingId}
-            onChange={(e) => setDelayFundingId(e.target.value)}
-          >
-            {delayCandidates.map((f) => (
-              <option key={asString(f["id"])} value={asString(f["id"])}>
-                {asString(f["label"], asString(f["id"]))}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-lg border border-[var(--sr-line)] px-2 py-1.5"
-            value={delayDays}
-            onChange={(e) => setDelayDays(e.target.value)}
-          >
-            <option value="0">No delay</option>
-            <option value="3">+3 days</option>
-            <option value="7">+7 days</option>
-            <option value="14">+14 days</option>
-            <option value="custom">Custom date</option>
-          </select>
-          {delayDays === "custom" ? (
-            <input
-              type="date"
-              className="rounded-lg border border-[var(--sr-line)] px-2 py-1.5"
-              value={customDate}
-              onChange={(e) => setCustomDate(e.target.value)}
-            />
-          ) : (
-            <div className="text-[var(--sr-ink)]/60">Choose a delay option and apply.</div>
-          )}
-        </div>
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
-            className="rounded-lg bg-[var(--sr-pine)] px-3 py-1.5 text-white disabled:opacity-50"
-            onClick={applyDelay}
-            disabled={!sessionId || !!busy || !delayFundingId || delayDays === "0" || (delayDays === "custom" && !customDate)}
-          >
-            Apply delay
-          </button>
-          <button
-            type="button"
-            className="rounded-lg border border-[var(--sr-line)] px-3 py-1.5 disabled:opacity-50"
-            onClick={() => action("clear_delay_scenario", {})}
-            disabled={!sessionId || !!busy}
-          >
-            Clear
-          </button>
-        </div>
-      </div>
-
       {baseline && (
         <div className="rounded-xl border border-[var(--sr-line)] bg-white/50 p-3 text-xs">
           <p className="font-semibold text-[var(--sr-ink)]">Earliest shortfall analysis</p>
           <p className="mt-1 text-[var(--sr-ink)]/75">
-            Baseline: {isRecord(baseline["earliestShortfall"]) ? `shortfall on ${asString((baseline["earliestShortfall"] as Record<string, unknown>)["date"])} (${money((baseline["earliestShortfall"] as Record<string, unknown>)["shortfallMinor"], baseline["currency"])})` : "no shortfall detected"}
-          </p>
-          <p className="text-[var(--sr-ink)]/75">
-            Scenario: {scenario && isRecord(scenario["earliestShortfall"]) ? `shortfall on ${asString((scenario["earliestShortfall"] as Record<string, unknown>)["date"])} (${money((scenario["earliestShortfall"] as Record<string, unknown>)["shortfallMinor"], scenario["currency"])})` : scenario ? "no shortfall detected" : "no active delay scenario"}
+            Baseline projection: {isRecord(baseline["earliestShortfall"]) ? `shortfall on ${asString((baseline["earliestShortfall"] as Record<string, unknown>)["date"])} (${money((baseline["earliestShortfall"] as Record<string, unknown>)["shortfallMinor"], baseline["currency"])})` : "no shortfall detected"}
           </p>
         </div>
       )}
 
-      {recoveryOptions.length > 0 && (
-        <div className="rounded-xl border border-[var(--sr-line)] bg-white/50 p-3 text-xs">
-          <p className="font-semibold text-[var(--sr-ink)]">Delay recovery options (hypothetical)</p>
-          <ul className="mt-2 space-y-2">
-            {recoveryOptions.map((o) => {
-              const assumption = isRecord(o["assumption"]) ? o["assumption"] : null;
-              return (
-                <li key={asString(o["id"])} className="rounded-lg border border-[var(--sr-line)] p-2">
-                  <p className="font-medium">{asString(o["label"])}</p>
-                  <p className="mt-0.5 text-[var(--sr-ink)]/70">{asString(o["rationale"])}</p>
-                  {assumption && (
-                    <button
-                      type="button"
-                      className="mt-2 rounded-lg border border-[var(--sr-line)] px-2.5 py-1.5 disabled:opacity-50"
-                      onClick={() => action("apply_recovery_assumption", { assumption })}
-                      disabled={!sessionId || !!busy}
-                    >
-                      Apply assumption
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
-
-      {selectedRecovery && (
-        <div className="rounded-xl border border-[var(--sr-line)] bg-white/50 p-3 text-xs">
-          <p className="font-semibold text-[var(--sr-ink)]">Active recovery assumption</p>
-          <p className="mt-1 text-[var(--sr-ink)]/75">
-            <span className="font-medium">{asString(selectedRecovery["label"])}</span>
-          </p>
-          <button
-            type="button"
-            className="mt-2 rounded-lg border border-[var(--sr-line)] px-2.5 py-1.5 disabled:opacity-50"
-            onClick={() => action("clear_recovery_assumption", {})}
-            disabled={!sessionId || !!busy}
-          >
-            Clear recovery assumption
-          </button>
-        </div>
-      )}
-
-      <Disclosure label="Funding timeline (active projection)">
+      <Disclosure label="Funding timeline (baseline projection)">
         <div className="space-y-2">
           {timelineRows.length === 0 ? (
             <p className="text-xs text-[var(--sr-ink)]/60">No timeline events yet.</p>

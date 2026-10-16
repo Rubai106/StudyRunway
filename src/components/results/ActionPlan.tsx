@@ -3,23 +3,32 @@
 import { useEffect, useMemo, useState } from "react";
 import { STORAGE_PREFIX } from "../chat/persist";
 import { asArray, asString, isRecord } from "./shared";
+import { requestReminder } from "@/lib/reminders";
 
 interface PlanItem {
   id: string;
   label: string;
   detail: string;
+  deadline: string | null;
+  urgency: string;
+  estimatedImpact: string;
 }
 
 function readItems(v: unknown): PlanItem[] {
   return asArray<unknown>(v)
     .map((raw, i) => {
       if (typeof raw === "string")
-        return { id: `item-${i}`, label: raw, detail: "" };
+        return { id: `item-${i}`, label: raw, detail: "", deadline: null, urgency: "", estimatedImpact: "" };
       if (isRecord(raw))
         return {
           id: asString(raw["id"], `item-${i}`),
           label: asString(raw["label"] ?? raw["title"], `Step ${i + 1}`),
-          detail: asString(raw["detail"] ?? raw["description"]),
+          detail: asString(raw["purpose"] ?? raw["detail"] ?? raw["description"]),
+          deadline: typeof raw["deadlineDisplay"] === "string"
+            ? raw["deadlineDisplay"]
+            : typeof raw["deadline"] === "string" ? raw["deadline"] : null,
+          urgency: asString(raw["urgency"]),
+          estimatedImpact: asString(raw["estimatedImpact"]),
         };
       return null;
     })
@@ -38,7 +47,7 @@ function planKey(title: string, items: PlanItem[]): string {
 
 export default function ActionPlan({ data }: { data: Record<string, unknown> }) {
   const title = asString(data["title"], "Action plan");
-  const items = useMemo(() => readItems(data["items"] ?? data["steps"]), [data]);
+  const items = useMemo(() => readItems(data["actions"] ?? data["items"] ?? data["steps"]), [data]);
   const key = useMemo(() => planKey(title, items), [title, items]);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [loaded, setLoaded] = useState(false);
@@ -112,11 +121,32 @@ export default function ActionPlan({ data }: { data: Record<string, unknown> }) 
                   </span>
                   {item.label}
                 </label>
+                {(item.urgency || item.deadline) && (
+                  <p className="mt-1 pl-7 text-[11px] font-semibold uppercase tracking-wide text-[var(--sr-amber)]">
+                    {item.urgency}{item.urgency && item.deadline ? " · " : ""}{item.deadline}
+                  </p>
+                )}
                 {item.detail && (
                   <p className="mt-0.5 pl-7 text-xs text-[var(--sr-ink)]/60">
                     {item.detail}
                   </p>
                 )}
+                {item.estimatedImpact && (
+                  <p className="mt-1 pl-7 text-xs font-medium text-[var(--sr-ink)]/70">
+                    {item.estimatedImpact}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => requestReminder(
+                    item.deadline
+                      ? `${item.label} — deadline ${item.deadline}`
+                      : item.label,
+                  )}
+                  className="ml-7 mt-1 rounded-md text-[11px] font-semibold text-[var(--sr-pine)] underline underline-offset-2 hover:text-[var(--sr-pine)]/75 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)]"
+                >
+                  Set reminder
+                </button>
               </div>
             </li>
           );

@@ -21,6 +21,7 @@ import { analyzeQuote } from "../transfers";
 import { OBLIGATION_KINDS, Scenario, formatDateLong } from "../model";
 import { scaleMinor } from "../money";
 import {
+  currencyCodeSchema,
   ToolPlanSchema,
   assemblePlanState,
   withToolTimeout,
@@ -55,10 +56,110 @@ export const ScenarioInputSchema = z.discriminatedUnion("type", [
 ]);
 export type ScenarioInput = z.infer<typeof ScenarioInputSchema>;
 
+/**
+ * Explicit recovery assumptions supplied by the user. They are simulated on
+ * the stressed forecast only and never written back to the plan.
+ */
+export const RecoveryOptionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("additional_funding"),
+    label: z.string().min(1).max(120),
+    amountMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    currency: currencyCodeSchema,
+    availableDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }),
+  z.object({
+    type: z.literal("tuition_installment"),
+    label: z.string().min(1).max(120),
+    obligationId: z.string().min(1).max(120),
+    firstInstallmentMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    remainderDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }),
+]);
+
+export const RecoveryOptionsSchema = z.array(RecoveryOptionSchema).max(8).default([]);
+export type RecoveryOption = z.infer<typeof RecoveryOptionSchema>;
+
 export const SimulateScenarioParams = z.object({
   plan: ToolPlanSchema.describe("Plan object: fundingSources, obligations, planningCurrency, asOfDate, fx (quotes required for transfer_fee_change)"),
   scenario: ScenarioInputSchema.describe("The what-if scenario to simulate"),
+  recoveryOptions: RecoveryOptionsSchema.describe("Optional user-stated backup funding or tuition installment options to compare against the scenario. Never infer institutional approval or availability."),
 });
+
+function evaluateRecoveryOptions(
+  stressedState: ReturnType<typeof assemblePlanState>,
+  options: RecoveryOption[],
+) {
+  const evaluated = options.map((option, index) => {
+    const candidate = JSON.parse(JSON.stringify(stressedState)) as typeof stressedState;
+    let assumption: string;
+    if (option.type === "additional_funding") {
+      candidate.fundingSources.push({
+        id: `recovery-option-${index + 1}`,
+        label: option.label,
+        kind: "other",
+        amountMinor: option.amountMinor,
+        currency: option.currency,
+        status: "conditional",
+        availableDate: null,
+        expectedDate: option.availableDate,
+        notes: "Hypothetical recovery option; not confirmed or added to the plan.",
+        evidenceIds: [],
+      });
+      assumption = `Assumes ${option.label} of ${formatMinor(option.amountMinor, option.currency)} arrives by ${option.availableDate}; availability is unverified.`;
+    } else {
+      const original = candidate.obligations.find((obligation) => obligation.id === option.obligationId);
+      if (!original || original.kind !== "tuition" || original.status === "paid" || original.amountMinor == null || !original.dueDate) {
+        return {
+          label: option.label,
+          type: option.type,
+          valid: false,
+          reason: "The referenced unpaid tuition obligation with a known amount and due date was not found; no option was simulated.",
+        };
+      }
+      if (option.firstInstallmentMinor >= original.amountMinor || option.remainderDueDate <= original.dueDate) {
+        return {
+          label: option.label,
+          type: option.type,
+          valid: false,
+          reason: "The first installment must be smaller than the full tuition amount and the remainder date must be later than the current due date.",
+        };
+      }
+      const remainder = original.amountMinor - option.firstInstallmentMinor;
+      original.amountMinor = option.firstInstallmentMinor;
+      candidate.obligations.push({
+        ...original,
+        id: `${original.id}-recovery-${index + 1}`,
+        label: `${original.label} (installment remainder — scenario)`,
+        amountMinor: remainder,
+        dueDate: option.remainderDueDate,
+        notes: [original.notes, "Hypothetical installment split; university approval not confirmed."].filter(Boolean).join(" "),
+        evidenceIds: [...original.evidenceIds],
+      });
+      assumption = `Assumes (not confirmed) the university accepts ${formatMinor(option.firstInstallmentMinor, original.currency)} by ${original.dueDate} and the remaining ${formatMinor(remainder, original.currency)} by ${option.remainderDueDate}; no policy or fee was assumed.`;
+    }
+
+    const forecast = buildForecast(candidate);
+    return {
+      label: option.label,
+      type: option.type,
+      valid: true,
+      assumption,
+      remainingGapMinor: forecast.firstGap?.shortfallMinor ?? 0,
+      remainingGap: forecast.firstGap ? formatMinor(forecast.firstGap.shortfallMinor, forecast.planningCurrency) : null,
+      remainingGapDate: forecast.firstGap?.date ?? null,
+      minimumBalanceMinor: forecast.minBalanceMinor,
+      minimumBalance: formatMinor(forecast.minBalanceMinor, forecast.planningCurrency),
+      verdict: forecast.firstGap ? "gap remains" : "no gap in forecast window",
+      planningCurrency: forecast.planningCurrency,
+    };
+  });
+  const valid = evaluated.filter((option) => option.valid) as (typeof evaluated[number] & { remainingGapMinor: number; minimumBalanceMinor: number })[];
+  const order = new Map(valid
+    .sort((a, b) => a.remainingGapMinor - b.remainingGapMinor || b.minimumBalanceMinor - a.minimumBalanceMinor)
+    .map((option, rank) => [option.label, rank + 1]));
+  return evaluated.map((option) => option.valid ? { ...option, rank: order.get(option.label) ?? null } : option);
+}
 
 function deltaDays(a: string, b: string): number {
   return Math.round((Date.parse(a) - Date.parse(b)) / 86_400_000);
@@ -110,7 +211,7 @@ export const simulateScenarioTool: ToolDefinition = {
   description:
     "Run a what-if scenario (scholarship_delay, expense_increase, fx_shock, or transfer_fee_change) on a deep " +
     "copy of the plan and return baseline-vs-scenario diffs, the changed assumptions, and a practical implication. " +
-    "The input plan is never mutated. All figures come from the deterministic engine.",
+    "The input plan is never mutated. Optional user-stated funding and tuition installment options are simulated independently against the stress case, with the remaining gap calculated for each. Installment approval and backup-fund availability are never presumed.",
   parameters: SimulateScenarioParams,
   requiresApproval: false,
   handler: async (args, ctx) =>
@@ -210,6 +311,7 @@ export const simulateScenarioTool: ToolDefinition = {
       const applied = applyScenario(state, engineScenario);
       const modified = applied.result;
       const diff = diffForecasts(baseline, modified);
+      const recoveryOptions = evaluateRecoveryOptions(applied.state, parsed.data.recoveryOptions);
 
       const summary = implicationForForecastDiff(engineScenario.name, pc, baseline, modified);
 
@@ -237,6 +339,10 @@ export const simulateScenarioTool: ToolDefinition = {
           deltaMinBalanceMinor: diff.deltaMinBalanceMinor,
           deltaMinBalance: `${diff.deltaMinBalanceMinor < 0 ? "−" : "+"}${formatMinor(Math.abs(diff.deltaMinBalanceMinor), pc)}`,
           changedAssumptions: diff.changedAssumptions,
+          recoveryOptions,
+          recoveryOptionBasis: parsed.data.recoveryOptions.length > 0
+            ? "User-stated what-if options. They are independent scenarios; no option changes the plan or confirms availability, approval, fees, or policy."
+            : null,
           practicalImplication: summary,
           planningCurrency: pc,
         },

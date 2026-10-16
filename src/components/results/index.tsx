@@ -5,6 +5,7 @@ import TransferComparison from "./TransferComparison";
 import ScenarioComparison from "./ScenarioComparison";
 import ActionPlan from "./ActionPlan";
 import DocumentReview from "./DocumentReview";
+import PolicyResearch from "./PolicyResearch";
 import DraftEmail from "./DraftEmail";
 import LivingCostPlan from "./LivingCostPlan";
 import SafeToSendDecision from "./SafeToSendDecision";
@@ -16,6 +17,7 @@ const TITLES: Record<string, string> = {
   scenario_comparison: "Scenario comparison",
   action_plan: "Your action plan",
   document_review: "Document review",
+  policy_research: "Official policy research",
   draft_email: "Email draft",
   living_cost_plan: "Destination budget",
   safe_to_send_decision: "Safe-to-Send decision",
@@ -50,8 +52,15 @@ export default function ResultCard({ component, data, onFollowUpMessage, session
       break;
     case "document_review":
       body = (
-        <DocumentReview data={data} onCorrected={onFollowUpMessage} />
+        <DocumentReview
+          data={data}
+          onConfirmed={onFollowUpMessage}
+          onCorrected={onFollowUpMessage}
+        />
       );
+      break;
+    case "policy_research":
+      body = <PolicyResearch data={data} />;
       break;
     case "draft_email":
       body = <DraftEmail data={data} />;

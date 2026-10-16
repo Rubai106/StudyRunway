@@ -1,17 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LayoutDashboard, MessageSquareText } from "lucide-react";
 import type { AgentStreamEvent, ClarifyQuestion } from "@/lib/events";
 import { publishAgentEvent } from "@/lib/events";
 import { createSSEParser } from "./sse";
 import Composer from "./Composer";
 import ClarifyForm from "./ClarifyForm";
+import ReminderCenter from "../reminders/ReminderCenter";
+import Dashboard from "../dashboard/Dashboard";
 import ResultCard from "../results";
 import {
   clearLastSession,
+  filterPersistableResults,
   loadTranscript,
   lastSessionId,
   saveTranscript,
+  textForTranscriptStorage,
   wipeStudyRunwayData,
   type StoredMessage,
 } from "./persist";
@@ -28,7 +33,7 @@ interface Message {
 }
 
 interface ProviderStatus {
-  provider: "xai" | "gemini" | "openai" | "anthropic" | "demo";
+  provider: "xai" | "gemini" | "vertex" | "openai" | "anthropic" | "demo";
   model?: string;
   configured?: boolean;
   label?: string;
@@ -59,8 +64,10 @@ function toStored(m: Message): StoredMessage {
   return {
     id: m.id,
     role: m.role,
-    text: m.text,
-    results: m.results,
+    text: textForTranscriptStorage(m.text, m.results),
+    // Candidate evidence can contain unconfirmed financial facts. Keep it in
+    // the active view only; it should not be copied to durable localStorage.
+    results: filterPersistableResults(m.results),
     pendingClarifications: m.pendingClarifications,
     answeredQuestionIds: m.answeredQuestionIds,
     errorMessage: m.errorMessage,
@@ -89,6 +96,7 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 export default function ChatWorkspace() {
+  const [activeView, setActiveView] = useState<"overview" | "chat">("overview");
   const [sessionId, setSessionId] = useState<string>(() => newId());
   const [sessionReady, setSessionReady] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -197,7 +205,7 @@ export default function ChatWorkspace() {
       top: el.scrollHeight,
       behavior: reduced ? "auto" : "smooth",
     });
-  }, [messages, activeStatus]);
+  }, [messages, activeStatus, activeView]);
 
   const updateAssistant = useCallback(
     (fn: (m: Message) => Message) => {
@@ -270,7 +278,7 @@ export default function ChatWorkspace() {
   const sendMessage = useCallback(
     async (
       text: string,
-      options: { showUserMessage?: boolean; allowEmpty?: boolean } = {},
+      options: { showUserMessage?: boolean; allowEmpty?: boolean; displayText?: string } = {},
     ) => {
       if (streaming || !sessionReady) return;
       setComposerError(null);
@@ -285,7 +293,7 @@ export default function ChatWorkspace() {
         : {
             id: newId(),
             role: "user",
-            text: trimmed,
+            text: options.displayText ?? trimmed,
             status: "done",
             results: [],
             pendingClarifications: [],
@@ -394,7 +402,7 @@ export default function ChatWorkspace() {
 
   const retry = useCallback(() => {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    if (!lastUser || streaming) return;
+    if (!lastUser || streaming || lastUser.text.includes("[Attached document:")) return;
     // Drop any trailing failed/stopped assistant message before retrying.
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.id === lastUser.id);
@@ -427,7 +435,27 @@ export default function ChatWorkspace() {
     setMessages([]);
     setActiveStatus(null);
     setComposerError(null);
+    setActiveView("chat");
   }, [stop]);
+
+  const openConversationMessage = useCallback((messageId: string) => {
+    setActiveView("chat");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById(`assistant-message-${messageId}`)?.scrollIntoView({
+          block: "center",
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? "auto"
+            : "smooth",
+        });
+      });
+    });
+  }, []);
+
+  const askFromDashboard = useCallback((prompt: string) => {
+    setActiveView("chat");
+    void sendMessage(prompt);
+  }, [sendMessage]);
 
   const deleteData = useCallback(() => {
     if (
@@ -452,6 +480,7 @@ export default function ChatWorkspace() {
   const canRetry =
     !streaming &&
     lastUserMessage !== null &&
+    !lastUserMessage?.text.includes("[Attached document:") &&
     messages.some(
       (m) =>
         m.role === "assistant" &&
@@ -469,7 +498,7 @@ export default function ChatWorkspace() {
   ) : provider.provider === "demo" || !provider.configured ? (
     <span
       className="rounded-full border border-[var(--sr-amber)]/50 bg-[var(--sr-amber)]/10 px-2.5 py-1 text-[11px] font-semibold text-[var(--sr-amber)]"
-      title="No AI provider is configured, so the agent runs its built-in demo engine."
+      title={provider.label ?? "No AI provider is configured, so the agent runs its built-in demo engine."}
     >
       Demo mode
     </span>
@@ -485,7 +514,7 @@ export default function ChatWorkspace() {
   return (
     <div className="flex h-dvh flex-col bg-[var(--sr-paper)] text-[var(--sr-ink)]">
       {/* Header */}
-      <header className="flex items-center justify-between gap-3 border-b border-[var(--sr-line)] bg-[var(--sr-paper)]/95 px-3 py-2.5 sm:px-6">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--sr-line)] bg-[var(--sr-paper)]/95 px-3 py-2.5 sm:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
           <span
             aria-hidden="true"
@@ -506,7 +535,28 @@ export default function ChatWorkspace() {
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <nav aria-label="Main navigation" className="order-3 flex w-full items-center gap-1 border-t border-[var(--sr-line)] pt-2 sm:order-none sm:w-auto sm:border-0 sm:pt-0">
+          <button
+            type="button"
+            onClick={() => setActiveView("overview")}
+            aria-pressed={activeView === "overview"}
+            className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] ${activeView === "overview" ? "bg-[var(--sr-pine)]/10 text-[var(--sr-pine)]" : "text-[var(--sr-ink)]/60 hover:bg-[var(--sr-mist)]/70"}`}
+          >
+            <LayoutDashboard size={15} aria-hidden="true" />
+            Overview
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveView("chat")}
+            aria-pressed={activeView === "chat"}
+            className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] ${activeView === "chat" ? "bg-[var(--sr-pine)]/10 text-[var(--sr-pine)]" : "text-[var(--sr-ink)]/60 hover:bg-[var(--sr-mist)]/70"}`}
+          >
+            <MessageSquareText size={15} aria-hidden="true" />
+            Chat
+          </button>
+        </nav>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <ReminderCenter />
           {providerBadge}
           <button
             type="button"
@@ -528,75 +578,86 @@ export default function ChatWorkspace() {
         </div>
       </header>
 
-      {/* Conversation */}
-      <div
-        ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6"
-        role="log"
-        aria-label="Conversation"
-        aria-live="polite"
-      >
-        <div className="mx-auto max-w-3xl">
-          {messages.length === 0 ? (
-            <Intro
-              onExample={(text) => sendMessage(text)}
-              disabled={!sessionReady}
-            />
-          ) : (
-            messages.map((m) =>
-              m.role === "user" ? (
-                <UserMessage key={m.id} text={m.text} />
-              ) : (
-                <AssistantMessage
-                  key={m.id}
-                  message={m}
-                  isActive={streaming && activeStatus !== null}
-                  activeStatus={activeStatus}
-                  onAnswered={(qid) => {
-                    markAnswered(m.id, qid);
-                    // Wait until every clarification in this message has an
-                    // answer. Then resume the paused task in one tap without
-                    // adding a fake user bubble to the transcript.
-                    if (m.pendingClarifications.length <= 1) {
-                      window.setTimeout(() => {
-                        void sendMessage("", {
-                          showUserMessage: false,
-                          allowEmpty: true,
-                        });
-                      }, 0);
-                    }
-                  }}
-                  onFollowUpMessage={(text) => sendMessage(text)}
-                  onRetry={retry}
-                  sessionId={sessionId}
+      {activeView === "overview" ? (
+        <Dashboard
+          messages={messages}
+          onAsk={askFromDashboard}
+          onOpenConversation={openConversationMessage}
+          disabled={!sessionReady || streaming}
+        />
+      ) : (
+        <>
+          {/* Conversation */}
+          <div
+            ref={scrollRef}
+            className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6"
+            role="log"
+            aria-label="Conversation"
+            aria-live="polite"
+          >
+            <div className="mx-auto max-w-3xl">
+              {messages.length === 0 ? (
+                <Intro
+                  onExample={(text) => sendMessage(text)}
+                  disabled={!sessionReady}
                 />
-              ),
-            )
-          )}
-        </div>
-      </div>
+              ) : (
+                messages.map((m) =>
+                  m.role === "user" ? (
+                    <UserMessage key={m.id} text={m.text} />
+                  ) : (
+                    <AssistantMessage
+                      key={m.id}
+                      message={m}
+                      isActive={streaming && activeStatus !== null}
+                      activeStatus={activeStatus}
+                      onAnswered={(qid) => {
+                        markAnswered(m.id, qid);
+                        // Wait until every clarification in this message has an
+                        // answer. Then resume the paused task in one tap without
+                        // adding a fake user bubble to the transcript.
+                        if (m.pendingClarifications.length <= 1) {
+                          window.setTimeout(() => {
+                            void sendMessage("", {
+                              showUserMessage: false,
+                              allowEmpty: true,
+                            });
+                          }, 0);
+                        }
+                      }}
+                      onFollowUpMessage={(text) => sendMessage(text)}
+                      onRetry={retry}
+                      sessionId={sessionId}
+                    />
+                  ),
+                )
+              )}
+            </div>
+          </div>
 
-      {/* Mobile delete-data link */}
-      <div className="border-t border-[var(--sr-line)] bg-[var(--sr-paper)] px-3 pt-1 sm:hidden">
-        <button
-          type="button"
-          onClick={deleteData}
-          disabled={!sessionReady}
-          className="text-[11px] text-[var(--sr-ink)]/50 underline disabled:opacity-50"
-        >
-          Delete my data
-        </button>
-      </div>
+          {/* Mobile delete-data link */}
+          <div className="border-t border-[var(--sr-line)] bg-[var(--sr-paper)] px-3 pt-1 sm:hidden">
+            <button
+              type="button"
+              onClick={deleteData}
+              disabled={!sessionReady}
+              className="text-[11px] text-[var(--sr-ink)]/50 underline disabled:opacity-50"
+            >
+              Delete my data
+            </button>
+          </div>
 
-      <Composer
-        onSend={sendMessage}
-        onStop={stop}
-        onRetry={retry}
-        streaming={streaming}
-        canRetry={canRetry}
-        disabled={!sessionReady}
-        error={composerError}
-      />
+          <Composer
+            onSend={(text, displayText) => sendMessage(text, { displayText })}
+            onStop={stop}
+            onRetry={retry}
+            streaming={streaming}
+            canRetry={canRetry}
+            disabled={!sessionReady}
+            error={composerError}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -705,7 +766,7 @@ function AssistantMessage({
   const showStatus =
     message.status === "streaming" && (isActive || activeStatus);
   return (
-    <div className="mb-6">
+    <div id={`assistant-message-${message.id}`} className="mb-6 scroll-mt-4" tabIndex={-1}>
       {message.text && (
         <div className="max-w-[92%] text-sm leading-relaxed">
           <p className="whitespace-pre-wrap">{message.text}</p>

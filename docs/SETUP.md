@@ -24,7 +24,14 @@ Never commit `.env.local`; never put these in client code.
 
 | Variable | Purpose |
 |---|---|
-| `AI_PROVIDER` | Optional explicit provider selection: `demo`, `gemini`, `xai`, `openai`, or `anthropic`. This prevents a leftover key for another provider from taking precedence. The example config selects `gemini`. |
+| `AI_PROVIDER` | Optional explicit provider selection: `demo`, `vertex`, `gemini`, `xai`, `openai`, or `anthropic`. This prevents a leftover key for another provider from taking precedence. |
+| `AI_BACKEND` | Optional backend selector; `vertex-adc` selects Vertex AI with ADC and takes precedence over `AI_PROVIDER`. |
+| `AUTH_MODE` | Vertex authentication mode. This integration supports `ADC`. |
+| `VERTEX_AI_PROJECT` | Google Cloud project ID for Vertex AI. `VERTEX_AI_PROJECT_ID` and `GOOGLE_CLOUD_PROJECT` are accepted as fallbacks. |
+| `VERTEX_AI_LOCATION` | Vertex AI location; defaults to `global`. `GOOGLE_CLOUD_LOCATION` is accepted as a fallback. |
+| `VERTEX_AI_MODEL` | Vertex-hosted Gemini model; defaults to `google/gemini-3.5-flash`. Set a model enabled for your project. |
+| `VERTEX_AI_RESEARCH_MODEL` | Native Gemini model for policy research with Google Search grounding; defaults to `gemini-2.5-flash`. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Optional path to a service-account JSON credentials file. Local `gcloud` Application Default Credentials are also supported. |
 | `GEMINI_API_KEY` | Google AI Studio API key. For the Google provider, use an API key created at https://aistudio.google.com/app/apikey. |
 | `GEMINI_MODEL` | Gemini model ID available to your key; default is `gemini-3.8-flash` as listed in Google's current OpenAI-compatibility example. Verify model availability in your AI Studio/account if rejected. |
 | `GEMINI_BASE_URL` | Defaults to `https://generativelanguage.googleapis.com/v1beta/openai/`. Custom values are accepted only for Google's HTTPS compatibility endpoint. |
@@ -32,7 +39,18 @@ Never commit `.env.local`; never put these in client code.
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` | Optional OpenAI or OpenAI-compatible provider. `OPENAI_BASE_URL` now honours the environment variable. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Optional Anthropic/Claude provider. |
 
-If `AI_PROVIDER` is set to a valid provider, StudyRunway uses only that provider; set it to `demo` to disable external model calls (as the browser tests do). it does not silently fall back to another configured provider. Without `AI_PROVIDER`, selection priority is xAI → Gemini → OpenAI → Anthropic → demo mode. The header badge and `/api/agent/status` show the active provider honestly. The application does not silently fall back to another configured provider when `AI_PROVIDER` explicitly selects a provider that is missing a valid key.
+If `AI_PROVIDER` is set to a valid provider, StudyRunway uses only that provider; set it to `demo` to disable external model calls (as the browser tests do). It does not silently fall back to another configured provider. Without `AI_PROVIDER`, selection priority is xAI → Vertex AI → Gemini → OpenAI → Anthropic → demo mode. The header badge and `/api/agent/status` show the active provider honestly. The application does not silently fall back to another configured provider when `AI_PROVIDER` explicitly selects a provider that is missing required configuration.
+
+### Google Vertex AI / Gemini setup
+
+1. In your Google Cloud project, enable the Vertex AI API and billing, and grant the identity you will use the Vertex AI User (`roles/aiplatform.user`) role.
+2. For local development, install the Google Cloud CLI and run `gcloud auth application-default login`. Alternatively, configure `GOOGLE_APPLICATION_CREDENTIALS` to a service-account JSON file stored outside the repository.
+3. In `.env.local`, set `AUTH_MODE=ADC`, `AI_BACKEND=vertex-adc`, `VERTEX_AI_PROJECT` to your project ID, and `VERTEX_AI_LOCATION` to a supported location (the default is `global`). Optionally set `VERTEX_AI_MODEL`; the default is `google/gemini-3.5-flash`.
+4. Restart `npm run dev`. The header should display `Google Vertex AI · <model>` when the provider is configured.
+
+This uses the standard project-scoped Vertex AI OpenAI-compatible endpoint and Google Cloud Application Default Credentials. It does **not** use an AI Studio API key. Google documents the endpoint and authentication in [Vertex AI's OpenAI compatibility guide](https://cloud.google.com/vertex-ai/generative-ai/docs/start/openai). Keep credentials out of chat and source control.
+
+Official policy research uses Vertex's native `generateContent` endpoint with Google Search grounding, separate from the OpenAI-compatible chat endpoint. Enable Vertex AI API/billing and Google Search suggestions for the project. Set `VERTEX_AI_RESEARCH_MODEL` to a Gemini model that supports Search grounding. Research needs a destination country; tuition, instalment, and scholarship lookups also need the university or awarding body. Returned claims include direct source pages and a checked-at timestamp. A result is withheld unless every returned source passes the app's official-domain check (`.gov`, recognized `.edu`/`.ac` domains, or a domain you provide). Google Search suggestions are displayed as returned by Vertex. Grounded Search has separate [Google Search grounding](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search) and [Search suggestion display requirements](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-search-suggestions).
 
 ### Google AI Studio / Gemini setup
 
@@ -48,9 +66,9 @@ The provider uses Google's documented OpenAI-compatible endpoint and standard fu
 
 If the header says **Demo mode**, real model reasoning is not enabled. Custom
 requests (for example, a tuition-transfer recommendation) cannot be answered
-by an AI model until a valid provider API key is configured. The sample budget
+by an AI model until provider credentials are configured. The sample budget
 button runs only the deterministic living-cost demo. Copying `.env.example`
-is not enough: replace its placeholder key values with real credentials.
+is not enough: replace its placeholders with valid credentials/configuration.
 
 Without any key the agent runs its **explicitly labelled demo mode**: the
 same structured loop (understand → clarify → plan → tools → verify →
@@ -58,7 +76,7 @@ outcome) executes with the real tools and the real deterministic engine, but
 every user-visible string is prefixed
 `"Demo mode — no model provider configured"` and the final result carries
 `demoMode: true`. Demo mode never claims model reasoning happened. To get the
-real thing: configure one provider key in `.env.local` (for example `GEMINI_API_KEY`) and restart.
+real thing: configure one provider in `.env.local` (for Vertex AI, set the project and ADC) and restart.
 
 #### Running the Destination Budget Planner demo (no key needed)
 
@@ -130,7 +148,7 @@ and address anything actionable. The build already pins `next@15.5.28` +
 ## Project layout (quick map)
 
 - `src/lib/agent/` — orchestration loop, task state, tool registry, tool contract
-- `src/lib/providers/` — xAI / Gemini / OpenAI / Anthropic adapters + selection
+- `src/lib/providers/` — xAI / Vertex AI / Gemini / OpenAI / Anthropic adapters + selection
 - `src/lib/tools/` — the 8 financial tools (deterministic engine wrappers),
   including `build_living_cost_plan`
 - `src/lib/livingCosts/` — the destination budget engine (`dataset`,

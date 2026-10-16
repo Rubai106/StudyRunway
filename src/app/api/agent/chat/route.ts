@@ -20,7 +20,8 @@
  * sessions — one session can never read or delete another's state.
  */
 import { runAgent, type AgentEvent } from "@/lib/agent/orchestrator";
-import { deleteSession } from "@/lib/agent/state";
+import { deleteSession, getTask } from "@/lib/agent/state";
+import { writeAuditEvent } from "@/lib/agent/audit";
 import { requestOriginError, sessionIdError } from "@/lib/agent/session";
 import { checkRateLimit, RATE_MAX_REQUESTS, RATE_WINDOW_MS } from "@/lib/agent/rateLimit";
 
@@ -147,9 +148,11 @@ export async function DELETE(req: Request): Promise<Response> {
     return Response.json({ error: sidErr }, { status: 400 });
   }
   const sessionId = searchParams.get("sessionId") as string;
+  const taskId = getTask(sessionId)?.taskId;
   const deleted = deleteSession(sessionId);
   if (!deleted) {
     return Response.json({ ok: false, error: "unknown session" }, { status: 404 });
   }
+  if (taskId) writeAuditEvent({ type: "agent.session.deleted", taskId });
   return Response.json({ ok: true, deleted: true });
 }

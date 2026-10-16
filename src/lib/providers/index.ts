@@ -1,16 +1,18 @@
 /**
  * Provider selection — owned by the AGENT CORE workstream.
  *
- * An optional AI_PROVIDER explicitly selects a provider. Without it, priority
- * is xAI → Gemini → OpenAI → Anthropic → demo mode. Gemini uses Google's
- * OpenAI-compatible endpoint and GEMINI_API_KEY / GEMINI_MODEL /
- * GEMINI_BASE_URL. All adapters run server-side only.
+ * AI_BACKEND or AI_PROVIDER explicitly selects a provider. Without either, priority
+ * is xAI → Vertex AI → Gemini → OpenAI → Anthropic → demo mode. Vertex AI
+ * uses the Google Cloud OpenAI-compatible endpoint and Application Default
+ * Credentials. AI Studio Gemini uses its separate API-key endpoint. All
+ * adapters run server-side only.
  * Server-side only: never import this module (or any provider) into client
  * components. Keys are never logged — the label carries only the provider
  * and model names.
  */
 import { createXaiProvider, readXaiConfig } from "./xai";
 import { createGeminiProvider, readGeminiConfig } from "./gemini";
+import { createVertexProvider, readVertexConfig } from "./vertex";
 import { createOpenAiProvider, readOpenAiConfig } from "./openai";
 import { createAnthropicProvider, readAnthropicConfig } from "./anthropic";
 import type { Provider, ProviderName } from "./types";
@@ -32,7 +34,7 @@ export interface ProviderSelection {
   provider: Provider | null;
   /** Model id in use, or null in demo mode. */
   model: string | null;
-  /** True when a real provider key is configured. */
+  /** True when provider settings are configured (ADC itself is resolved on request for Vertex). */
   configured: boolean;
   /** Human label for the UI status endpoint. Never contains a key. */
   label: string;
@@ -40,8 +42,11 @@ export interface ProviderSelection {
 
 /** Pick the provider from env. Pure function of process.env — safe per request. */
 export function selectProvider(): ProviderSelection {
-  const forced = (process.env.AI_PROVIDER ?? "").trim().toLowerCase();
-  const validNames: ProviderName[] = ["xai", "gemini", "openai", "anthropic"];
+  const selectedBackend = (
+    process.env.AI_BACKEND?.trim() || process.env.AI_PROVIDER?.trim() || ""
+  ).toLowerCase();
+  const forced = selectedBackend === "vertex-adc" ? "vertex" : selectedBackend;
+  const validNames: ProviderName[] = ["xai", "vertex", "gemini", "openai", "anthropic"];
   const demoSelection: ProviderSelection = {
     name: "demo", provider: null, model: null, configured: false,
     label: "Demo mode — no model provider configured",
@@ -60,6 +65,13 @@ export function selectProvider(): ProviderSelection {
       return config ? {
         name, provider: createGeminiProvider(config), model: config.model,
         configured: true, label: `Google Gemini · ${config.model}`,
+      } : null;
+    }
+    if (name === "vertex") {
+      const config = readVertexConfig();
+      return config ? {
+        name, provider: createVertexProvider(config), model: config.model,
+        configured: true, label: `Google Vertex AI · ${config.model}`,
       } : null;
     }
     if (name === "openai") {
@@ -81,11 +93,19 @@ export function selectProvider(): ProviderSelection {
   if (forced && !/^(?:placeholder|your[_ -].*)$/i.test(forced)) {
     if (forced === "demo") return demoSelection;
     if (validNames.includes(forced as ProviderName)) {
-      return makeSelection(forced as ProviderName) ?? demoSelection;
+      const selection = makeSelection(forced as ProviderName);
+      if (selection) return selection;
+      if (forced === "vertex") {
+        return {
+          ...demoSelection,
+          label: "Demo mode — set VERTEX_AI_PROJECT and configure Google Cloud ADC",
+        };
+      }
+      return demoSelection;
     }
     return {
       ...demoSelection,
-      label: "Demo mode — AI_PROVIDER must be demo, xai, gemini, openai, or anthropic",
+      label: "Demo mode — AI_BACKEND must be vertex-adc, or AI_PROVIDER must be demo, xai, vertex, gemini, openai, or anthropic",
     };
   }
 

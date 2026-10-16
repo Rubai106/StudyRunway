@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { getCurrency } from "@/lib/currency";
 
 /** Defensive accessor for loosely-typed result payloads. */
 export function get<T>(
@@ -54,6 +55,19 @@ export function formatMoney(
   return new Intl.NumberFormat("en-GB", {
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+/** Format integer minor units without converting money through binary display guesses. */
+export function formatMinorMoney(
+  amountMinor: number | null | undefined,
+  currency: string,
+): string {
+  if (amountMinor === null || amountMinor === undefined || !Number.isSafeInteger(amountMinor)) return "—";
+  try {
+    return formatMoney(amountMinor / 10 ** getCurrency(currency).minorUnits, currency);
+  } catch {
+    return `${amountMinor} ${currency}`;
+  }
 }
 
 /** Collapsible progressive-disclosure section. */

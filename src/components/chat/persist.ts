@@ -4,6 +4,7 @@
  */
 
 import type { ClarifyQuestion } from "@/lib/events";
+import { REMINDERS_CHANGE_EVENT } from "@/lib/reminders";
 
 export const STORAGE_PREFIX = "studyrunway.";
 export const LAST_SESSION_KEY = `${STORAGE_PREFIX}last-session`;
@@ -22,6 +23,18 @@ export interface StoredMessage {
   pendingClarifications: ClarifyQuestion[];
   answeredQuestionIds: string[];
   errorMessage?: string;
+}
+
+/** Do not write unconfirmed document candidates/source excerpts to transcript storage. */
+export function filterPersistableResults(results: StoredResult[]): StoredResult[] {
+  return results.filter((result) => result.component !== "document_review");
+}
+
+/** Avoid copying narrative that may repeat unconfirmed document candidates into localStorage. */
+export function textForTranscriptStorage(text: string, results: StoredResult[]): string {
+  return results.some((result) => result.component === "document_review")
+    ? "Document candidates were shown for review in the active session; unconfirmed document evidence is not stored."
+    : text;
 }
 
 function isLocalStorageAvailable(): boolean {
@@ -81,6 +94,7 @@ export function wipeStudyRunwayData(): number {
       if (key && key.startsWith(STORAGE_PREFIX)) keys.push(key);
     }
     for (const key of keys) window.localStorage.removeItem(key);
+    window.dispatchEvent(new Event(REMINDERS_CHANGE_EVENT));
     return keys.length;
   } catch {
     return 0;

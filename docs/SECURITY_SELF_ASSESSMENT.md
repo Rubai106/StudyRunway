@@ -82,14 +82,17 @@ bottom are the ones we knowingly ship with.
 
 ## 6. Secrets
 
-- Provider keys (`XAI_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are read
+- Provider keys and Vertex ADC (`XAI_API_KEY`, `GEMINI_API_KEY`,
+  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and Google Cloud credentials) are read
   **server-side only** (`readXaiConfig` etc. run in route handlers / server
-  code). The frontend bundle never contains them; `/api/agent/status` returns
-  only `{ provider, model, configured, label }`.
+  code). Vertex tokens are acquired server-side and sent only to the fixed
+  Google Vertex endpoint. The frontend bundle never contains credentials;
+  `/api/agent/status` returns only `{ provider, model, configured, label }`.
 - The provider unit tests assert the Authorization header is the literal
   `Bearer <redacted>` in logs and that keys never appear in labels.
 - `.env.example` contains placeholders only; `.gitignore` excludes
-  `.env.local`. No real key exists in this repo or environment.
+  `.env.local`. No real key or Google Cloud credential exists in this repo or
+  environment.
 
 ## 7. PII redaction before provider calls
 
@@ -105,9 +108,18 @@ bottom are the ones we knowingly ship with.
 
 - Server task state is in-memory only (process-local `Map`); it is lost on
   restart and never leaves the server.
+- Server-side agent audit events are emitted as privacy-limited JSON lines to
+  stdout. They record task lifecycle, clarification kind/count, approval
+  outcome, tool name/outcome/duration, and task deletion. They omit prompts,
+  answers, documents, session IDs, tool arguments/results, and credentials.
+  Cloud Logging can ingest these on Google Cloud, but durable retention,
+  access controls, and tamper-evident exports are deployment configuration;
+  local stdout is not a durable audit store.
 - Client transcripts live in `localStorage` under the `studyrunway.*` prefix.
   "Delete my data" wipes every key with that prefix after a confirm dialog and
-  starts a fresh session (E2E-tested: keys gone, transcript cleared).
+  starts a fresh session (E2E-tested: keys gone, transcript cleared). Reminders
+  are also stored only in browser localStorage and are removed by the same
+  action; their browser notifications contain no financial details.
 - No analytics, no third-party trackers, no cookies set by the app.
 
 ## 9. Dependency & platform posture (verified 2026-10-15)
@@ -192,8 +204,12 @@ bottom are the ones we knowingly ship with.
    and durable per-user storage before a real-user launch. Acceptable only for a
    competition
    demo, not for production.
-4. **`research_policy` is an honest stub** (no live web search): it can never
-   leak browsing data, but it also can never verify a policy — the user must.
+4. **Policy research depends on Vertex and official-domain screening.** The
+   implementation uses Vertex Google Search grounding, redacts common direct
+   identifiers in the query, and withholds an answer unless cited pages pass
+   the official-domain check. The integration has only deterministic mocked
+   evaluation here, not a live project run. The domain suffix list can miss a
+   legitimate authority; a user-confirmed official host is supported.
 5. **Demo mode is a fallback, not a sandbox**: it executes the real tool path
    with real (sample) data; outputs are labelled but could be screenshotted
    out of context.
@@ -201,5 +217,7 @@ bottom are the ones we knowingly ship with.
    (spoofable), no distributed enforcement. Do not rely on it in production.
 
 This assessment claims no production readiness and no certification. No
-payments, banking credentials, or external side effects exist anywhere in the
-build.
+payments, banking credentials, live transfer provider, or outbound email
+integration exists in this build. Email stays draft-only; reminders may raise
+generic browser notifications on the same device after permission is granted.
+The user selected demo access, so authentication remains absent by design.

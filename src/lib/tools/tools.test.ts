@@ -59,10 +59,6 @@ describe("TOOLS registry", () => {
         "add_safe_to_send_quote",
         "upsert_safe_to_send_funding_record",
         "confirm_safe_to_send_funding_receipt",
-        "set_safe_to_send_delay_scenario",
-        "clear_safe_to_send_delay_scenario",
-        "apply_safe_to_send_recovery_assumption",
-        "clear_safe_to_send_recovery_assumption",
         "recalculate_safe_to_send_decision",
         "get_safe_to_send_decision",
         "load_safe_to_send_demo_scenario",
@@ -337,7 +333,7 @@ describe("simulate_scenario", () => {
 });
 
 describe("research_policy", () => {
-  it("never fabricates a policy, deadline, or citation", async () => {
+  it("asks for location context before searching and never fabricates a citation", async () => {
     for (const query of [
       "What is the tuition refund deadline for international students?",
       "When does the Chevening scholarship decision come out?",
@@ -346,9 +342,10 @@ describe("research_policy", () => {
       const result = await researchPolicyTool.handler({ query, topic: "visa" }, CTX);
       expect(result.ok).toBe(true);
       expect(result.data!.answer).toBeNull();
-      expect(result.data!.note).toContain("not connected");
-      expect(Array.isArray(result.data!.suggestedSources)).toBe(true);
-      expect(result.evidence![0].label).toMatch(/unverified/i);
+      expect(result.data!.needsClarification).toBe(true);
+      expect(result.data!.missing).toContain("destination country");
+      expect(result.data!.note).toContain("No search was performed");
+      expect(result.evidence![0].label).toMatch(/clarification required/i);
       // No fabricated citations anywhere in the payload.
       const payload = JSON.stringify(result);
       expect(payload).not.toMatch(/https?:\/\//);
@@ -366,24 +363,25 @@ describe("build_action_plan", () => {
     expect(result.ok).toBe(true);
     const data = result.data!;
     const actions = data.actions as {
-      priority: number; title: string; purpose: string; deadline: string | null;
+      priority: number; urgency: string; title: string; purpose: string; deadline: string | null;
       evidenceRefs: string[]; estimatedImpactMinor: number | null; estimatedImpact: string | null;
     }[];
     expect(actions.length).toBeGreaterThan(0);
-    // Sorted by priority ascending.
+    // Sorted by urgency, then explicit deadline; category priority breaks ties.
+    const urgencyRank: Record<string, number> = { critical: 0, high: 1, medium: 2, unknown: 3 };
     for (let i = 1; i < actions.length; i++) {
-      expect(actions[i].priority).toBeGreaterThanOrEqual(actions[i - 1].priority);
+      expect(urgencyRank[actions[i].urgency]).toBeGreaterThanOrEqual(urgencyRank[actions[i - 1].urgency]);
     }
     for (const a of actions) {
       expect(a.title.length).toBeGreaterThan(0);
       expect(a.purpose.length).toBeGreaterThan(0);
       expect(Array.isArray(a.evidenceRefs)).toBe(true);
     }
-    // Top priority closes the gap; impact equals the shortfall.
-    const top = actions[0];
-    expect(top.priority).toBe(1);
-    expect(top.estimatedImpactMinor).toBe(278_00);
-    expect(top.deadline).toBe(addDaysISO(todayISO(null), 20));
+    // The gap action retains category priority 1 even when a nearer deadline
+    // ranks another action above it in the urgency-first display order.
+    const gapAction = actions.find((action) => action.priority === 1)!;
+    expect(gapAction.estimatedImpactMinor).toBe(278_00);
+    expect(gapAction.deadline).toBe(addDaysISO(todayISO(null), 20));
     expect(data.verdict).toMatch(/NOT READY/);
     expect(data.gapSummaryReceived).toContain("278.00");
   });

@@ -139,6 +139,11 @@ export function validateAnswer(
         if (field.required) {
           if (!v) {
             errors[field.name] = `${field.label} is required.`;
+          } else if (
+            /currenc/i.test(`${field.name} ${field.label}`) &&
+            !isSupportedCurrency(v.toUpperCase())
+          ) {
+            errors[field.name] = "Enter a supported 3-letter currency code, such as USD or EUR.";
           } else if (field.type === "number" && !Number.isFinite(Number(v))) {
             errors[field.name] = `${field.label} must be a number.`;
           } else if (

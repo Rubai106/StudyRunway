@@ -1,10 +1,12 @@
 # StudyRunway Deterministic-First Student Finance Engine (Sandbox)
 
-This module now combines three connected capabilities:
+This module combines two connected capabilities:
 
 1. Safe-to-Send tuition-payment decision
 2. Funding Timeline projection
-3. Delay Recovery scenario analysis
+
+Funding delays and recovery options are handled by the existing `simulate_scenario`
+workflow, which can compare user-stated shocks and responses against the funding gap.
 
 ## Deterministic authority
 
@@ -32,21 +34,8 @@ Draft state supports explicit incoming-funding records and timeline obligations:
 
 - Incoming funding statuses: `EXPECTED`, `AT_RISK`, `DELAYED`, `PARTIALLY_RECEIVED`, `RECEIVED`, `CANCELLED`
 - Timeline obligations: tuition/rent/living/other with amount, currency, due date, status
-- Separate hypothetical scenario state (`activeDelayScenario`) without overwriting confirmed records
-- Optional hypothetical recovery assumption (`selectedRecoveryAssumption`)
 
 Timeline output includes ordered events, balances, reserve threshold, earliest shortfall, and incomplete conversion notes.
-
-## Delay Recovery
-
-Delay/cancellation scenarios are simulated deterministically by applying scenario rules at projection time (not mutating confirmed receipt facts).
-
-The engine computes:
-
-- baseline timeline
-- scenario timeline
-- earliest shortfall under each
-- recovery option suggestions with explicit hypothetical assumptions
 
 ## Sandbox simulation integrity
 
@@ -68,8 +57,6 @@ Session state now tracks a server-authoritative workflow stage:
 - `INTAKE`
 - `COLLECTING_INFORMATION`
 - `FUNDING_PLAN_READY`
-- `SCENARIO_EVALUATED`
-- `RECOVERY_REVIEW`
 - `AWAITING_APPROVAL`
 - `SIMULATED`
 - `REVERTED`
@@ -78,8 +65,7 @@ Session state now tracks a server-authoritative workflow stage:
 Tool actions append structured event records (`safeToSend.events`) such as:
 
 - input collected
-- timeline/scenario calculated
-- recovery applied/cleared
+- baseline timeline calculated
 - receipt confirmed
 - simulation applied/reverted/rejected
 
@@ -103,12 +89,13 @@ Without an AI provider, users can still:
 
 - load deterministic demo scenario data
 - inspect timeline and shortfall
-- apply delay scenarios
-- apply/clear recovery assumptions
 - recalculate Safe-to-Send
 - run explicit simulated actions in sandbox mode
 
 via `POST /api/agent/safe-to-send` actions and the `SafeToSendDecision` result card controls.
+
+Delay and recovery scenarios remain available through the existing student-finance
+crisis planner and are intentionally not duplicated in this workflow.
 
 ## Storage limitation
 

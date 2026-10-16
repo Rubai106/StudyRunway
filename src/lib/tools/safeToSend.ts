@@ -298,6 +298,10 @@ function mergeDraft(
     ...base,
     ...patch,
   };
+  // Delay/recovery scenarios belong to the existing simulate_scenario planner.
+  // Keep these legacy engine fields out of the Safe-to-Send workflow surface.
+  delete nextRaw["activeDelayScenario"];
+  delete nextRaw["selectedRecoveryAssumption"];
   const maybeQuotes = nextRaw["quotes"];
   if (Array.isArray(maybeQuotes)) {
     nextRaw["quotes"] = replaceQuotes ? maybeQuotes : [...base.quotes, ...maybeQuotes];
@@ -1203,10 +1207,6 @@ export const safeToSendTools: ToolDefinition[] = [
   addSafeToSendQuoteTool,
   upsertSafeToSendFundingRecordTool,
   confirmSafeToSendFundingReceiptTool,
-  setSafeToSendDelayScenarioTool,
-  clearSafeToSendDelayScenarioTool,
-  applySafeToSendRecoveryAssumptionTool,
-  clearSafeToSendRecoveryAssumptionTool,
   recalculateSafeToSendDecisionTool,
   getSafeToSendDecisionTool,
   loadSafeToSendScenarioTool,
@@ -1220,10 +1220,6 @@ const ACTIONS: Record<string, ToolDefinition> = {
   add_quote: addSafeToSendQuoteTool,
   upsert_funding_record: upsertSafeToSendFundingRecordTool,
   confirm_funding_receipt: confirmSafeToSendFundingReceiptTool,
-  set_delay_scenario: setSafeToSendDelayScenarioTool,
-  clear_delay_scenario: clearSafeToSendDelayScenarioTool,
-  apply_recovery_assumption: applySafeToSendRecoveryAssumptionTool,
-  clear_recovery_assumption: clearSafeToSendRecoveryAssumptionTool,
   recalculate: recalculateSafeToSendDecisionTool,
   load_demo_scenario: loadSafeToSendScenarioTool,
   simulate: simulateSafeToSendPaymentTool,

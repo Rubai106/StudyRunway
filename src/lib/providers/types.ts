@@ -6,7 +6,7 @@
  * Adapters are thin HTTP clients; orchestration lives in `lib/agent`.
  */
 
-export type ProviderName = "xai" | "gemini" | "openai" | "anthropic";
+export type ProviderName = "xai" | "gemini" | "vertex" | "openai" | "anthropic";
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 
@@ -26,6 +26,8 @@ export interface ToolCallRequest {
   id: string;
   name: string;
   arguments: string;
+  /** Provider-native metadata that must round-trip with assistant tool calls (e.g. Vertex thought signatures). */
+  providerMetadata?: Record<string, unknown>;
 }
 
 /** A tool exposed to the model. `parameters` is a JSON Schema object. */

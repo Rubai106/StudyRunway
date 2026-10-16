@@ -38,11 +38,21 @@ export default function ScenarioComparison({
 }: {
   data: Record<string, unknown>;
 }) {
-  const scenarioName = asString(data["scenarioName"] ?? data["name"], "Scenario");
+  const rawName = asString(data["scenarioName"] ?? data["scenarioType"] ?? data["name"], "Scenario");
+  const scenarioName = rawName.replaceAll("_", " ");
   const baseline = data["baseline"];
   const scenario = data["scenario"];
-  const metrics = readMetrics(baseline, scenario);
+  const baselineRecord = isRecord(baseline) ? baseline : {};
+  const scenarioRecord = isRecord(scenario) ? scenario : {};
+  const metrics = baselineRecord["minBalance"] !== undefined || scenarioRecord["minBalance"] !== undefined
+    ? [
+        { label: "Lowest projected balance", baseline: asString(baselineRecord["minBalance"]), scenario: asString(scenarioRecord["minBalance"]), changed: baselineRecord["minBalance"] !== scenarioRecord["minBalance"] },
+        { label: "First gap date", baseline: asString(baselineRecord["gapDate"], "No gap"), scenario: asString(scenarioRecord["gapDate"], "No gap"), changed: baselineRecord["gapDate"] !== scenarioRecord["gapDate"] },
+        { label: "Shortfall", baseline: asString(baselineRecord["shortfall"], "None"), scenario: asString(scenarioRecord["shortfall"], "None"), changed: baselineRecord["shortfallMinor"] !== scenarioRecord["shortfallMinor"] },
+      ]
+    : readMetrics(baseline, scenario);
   const changedAssumptions = asArray<unknown>(data["changedAssumptions"]);
+  const recoveryOptions = asArray<Record<string, unknown>>(data["recoveryOptions"]).filter(isRecord);
 
   return (
     <div>
@@ -54,6 +64,28 @@ export default function ScenarioComparison({
           {scenarioName}
         </div>
       </div>
+      {recoveryOptions.length > 0 && (
+        <div className="mt-4">
+          <h4 className="text-xs font-bold uppercase tracking-wide text-[var(--sr-ink)]/60">Recovery options against this scenario</h4>
+          <ol className="mt-2 space-y-2">
+            {recoveryOptions.map((option, index) => (
+              <li key={`${asString(option["label"])}-${index}`} className="rounded-xl border border-[var(--sr-line)] bg-white/50 px-3 py-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-[var(--sr-ink)]">{asNumber(option["rank"]) ? `#${asNumber(option["rank"])} ` : ""}{asString(option["label"], "Recovery option")}</p>
+                  <span className="text-xs font-semibold text-[var(--sr-pine)]">{asString(option["verdict"], asString(option["reason"], "Not simulated"))}</span>
+                </div>
+                {option["valid"] === true && (
+                  <p className="mt-1 text-xs text-[var(--sr-ink)]/70">
+                    Remaining gap: {asString(option["remainingGap"], "None")} {asString(option["remainingGapDate"]) && `on ${asString(option["remainingGapDate"])}`}
+                  </p>
+                )}
+                {asString(option["assumption"]) && <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/60">{asString(option["assumption"])}</p>}
+              </li>
+            ))}
+          </ol>
+          <p className="mt-2 text-[11px] text-[var(--sr-ink)]/50">Each option is an independent what-if. Funding availability and university approval are not verified, and no plan changes were made.</p>
+        </div>
+      )}
       <div className="divide-y divide-[var(--sr-line)] rounded-b-xl border border-[var(--sr-line)]">
         {metrics.map((m) => (
           <div

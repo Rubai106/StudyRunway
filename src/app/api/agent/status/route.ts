@@ -1,7 +1,7 @@
 /**
  * GET /api/agent/status — which model provider (if any) is configured.
  *
- * Response: { provider: 'xai'|'gemini'|'openai'|'anthropic'|'demo', model: string|null,
+ * Response: { provider: 'xai'|'gemini'|'vertex'|'openai'|'anthropic'|'demo', model: string|null,
  *             configured: boolean, label: string }
  * The label never contains an API key.
  */

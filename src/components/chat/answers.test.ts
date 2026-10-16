@@ -130,6 +130,27 @@ describe("validateAnswer", () => {
       }),
     ).toEqual({});
   });
+
+  it("validates ISO currency codes in currency text fields", () => {
+    const currencyForm: ClarifyQuestion = {
+      ...formQ,
+      fields: [
+        ...(formQ.fields ?? []),
+        { name: "currency", label: "Currency code", type: "text", required: true },
+      ],
+    };
+    const values = {
+      university: "BRAC",
+      tuition: "12000",
+      deadline: "",
+      term: "",
+      currency: "ZZZ",
+    };
+    expect(validateAnswer(currencyForm, values)).toMatchObject({
+      currency: expect.stringContaining("3-letter currency code"),
+    });
+    expect(validateAnswer(currencyForm, { ...values, currency: "BDT" })).toEqual({});
+  });
 });
 
 describe("buildAnswerPayload", () => {

@@ -1,13 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { buildDocumentEvidenceMessage, candidatesFromText, extractPdfFacts, hasDocumentPromptInjection } from "@/lib/extract";
+import type { ExtractedCandidate } from "@/lib/extract";
 
 interface Props {
-  /** Called with the message text to send. */
-  onSend: (text: string) => void;
-  /** Called when the user clicks Stop during a stream. */
+  /** Request payload and privacy-safe transcript label. */
+  onSend: (requestText: string, displayText?: string) => void;
   onStop: () => void;
-  /** Called when the user clicks Retry after an error/stop. */
   onRetry: () => void;
   streaming: boolean;
   canRetry: boolean;
@@ -15,31 +15,29 @@ interface Props {
   error?: string | null;
 }
 
-const MAX_ATTACH_CHARS = 40000;
+interface LocalAttachment {
+  fileName: string;
+  documentKind: "invoice" | "scholarship_letter" | "fee_schedule" | "other";
+  candidates: ExtractedCandidate[];
+}
+
 const ACCEPTED = ".txt,.pdf";
+const DOCUMENT_KINDS: LocalAttachment["documentKind"][] = [
+  "invoice",
+  "scholarship_letter",
+  "fee_schedule",
+  "other",
+];
 
 async function extractTextFromFile(file: File): Promise<string> {
   if (file.name.toLowerCase().endsWith(".pdf")) {
-    const pdfjs = await import("pdfjs-dist");
-    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-    const buffer = await file.arrayBuffer();
-    const doc = await pdfjs.getDocument({ data: buffer }).promise;
-    const pages: string[] = [];
-    const count = Math.min(doc.numPages, 20);
-    for (let i = 1; i <= count; i++) {
-      const page = await doc.getPage(i);
-      const content = await page.getTextContent();
-      pages.push(
-        content.items
-          .map((item) =>
-            "str" in item && typeof item.str === "string" ? item.str : "",
-          )
-          .join(" "),
-      );
-    }
-    return pages.join("\n\n");
+    return (await extractPdfFacts(file)).text;
   }
   return await file.text();
+}
+
+function describeKind(kind: LocalAttachment["documentKind"]): string {
+  return kind.replaceAll("_", " ");
 }
 
 export default function Composer({
@@ -52,17 +50,29 @@ export default function Composer({
   error,
 }: Props) {
   const [value, setValue] = useState("");
+  const [attachment, setAttachment] = useState<LocalAttachment | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [attaching, setAttaching] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const trimmed = value.trim();
+  const canSend = Boolean(trimmed || attachment);
 
   const send = () => {
-    if (!trimmed || streaming || disabled) return;
-    onSend(trimmed);
+    if (!canSend || streaming || disabled) return;
+    const requestText = attachment
+      ? [trimmed, buildDocumentEvidenceMessage(attachment.documentKind, attachment.candidates)].filter(Boolean).join("\n\n")
+      : trimmed;
+    const displayText = attachment
+      ? [
+          trimmed,
+          `[Attached document: ${attachment.fileName}; ${attachment.candidates.length} local amount/date candidate(s); full document text was not saved to chat history.]`,
+        ].filter(Boolean).join("\n\n")
+      : undefined;
+    onSend(requestText, displayText);
     setValue("");
+    setAttachment(null);
     textareaRef.current?.focus();
   };
 
@@ -75,18 +85,21 @@ export default function Composer({
     }
     setAttaching(true);
     try {
-      const text = await extractTextFromFile(file);
-      const clean = text.replace(/\s+\n/g, "\n").trim();
-      if (!clean) {
+      const text = (await extractTextFromFile(file)).replace(/\s+\n/g, "\n").trim();
+      if (!text) {
         setAttachError("I couldn't read any text from that file.");
         return;
       }
-      const clipped =
-        clean.length > MAX_ATTACH_CHARS
-          ? clean.slice(0, MAX_ATTACH_CHARS) + "\n…(truncated)"
-          : clean;
-      const prefix = `I've attached the text of "${file.name}" below.\n\n`;
-      setValue((v) => (v ? `${v}\n\n${prefix}${clipped}` : `${prefix}${clipped}`));
+      if (hasDocumentPromptInjection(text)) {
+        setAttachError("This document contains instruction-like text, so it wasn't attached. Enter the financial facts you need checked manually.");
+        return;
+      }
+      const candidates = candidatesFromText(text);
+      setAttachment({
+        fileName: file.name.slice(0, 120),
+        documentKind: "other",
+        candidates,
+      });
       textareaRef.current?.focus();
     } catch {
       setAttachError("I couldn't read that file. Try a .txt or a text-based PDF.");
@@ -99,18 +112,13 @@ export default function Composer({
   return (
     <div className="border-t border-[var(--sr-line)] bg-[var(--sr-paper)]/95 px-3 pb-3 pt-2 sm:px-6 sm:pb-5">
       {(error || attachError) && (
-        <p
-          role="alert"
-          className="mx-auto mb-2 max-w-3xl rounded-xl border border-[var(--sr-clay)]/30 bg-[var(--sr-clay)]/10 px-3 py-2 text-xs text-[var(--sr-clay)]"
-        >
+        <p role="alert" className="mx-auto mb-2 max-w-3xl rounded-xl border border-[var(--sr-clay)]/30 bg-[var(--sr-clay)]/10 px-3 py-2 text-xs text-[var(--sr-clay)]">
           {error ?? attachError}
         </p>
       )}
       <div className="mx-auto max-w-3xl">
         <div className="rounded-2xl border border-[var(--sr-line)] bg-white shadow-[0_2px_12px_rgba(31,42,38,0.08)] transition focus-within:border-[var(--sr-pine)] focus-within:ring-2 focus-within:ring-[var(--sr-pine)]/20">
-          <label htmlFor="chat-composer" className="sr-only">
-            Message StudyRunway — Enter to send, Shift+Enter for a new line
-          </label>
+          <label htmlFor="chat-composer" className="sr-only">Message StudyRunway — Enter to send, Shift+Enter for a new line</label>
           <textarea
             id="chat-composer"
             ref={textareaRef}
@@ -128,70 +136,55 @@ export default function Composer({
             aria-describedby="composer-hint"
             className="max-h-40 w-full resize-y bg-transparent px-4 pb-1 pt-3 text-sm leading-relaxed text-[var(--sr-ink)] placeholder:text-[var(--sr-ink)]/40 outline-none disabled:opacity-60"
           />
-          <p id="composer-hint" className="sr-only">
-            Press Enter to send, Shift plus Enter for a new line.
-          </p>
+          <p id="composer-hint" className="sr-only">Press Enter to send, Shift plus Enter for a new line.</p>
+          {attachment && (
+            <div className="mx-3 mb-2 rounded-xl border border-[var(--sr-line)] bg-[var(--sr-mist)]/60 px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-xs font-medium" title={attachment.fileName}>📎 {attachment.fileName}</span>
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] text-[var(--sr-ink)]/60" htmlFor="document-kind">Document type</label>
+                  <select
+                    id="document-kind"
+                    value={attachment.documentKind}
+                    onChange={(e) => setAttachment((current) => current ? { ...current, documentKind: e.target.value as LocalAttachment["documentKind"] } : current)}
+                    className="rounded-lg border border-[var(--sr-line)] bg-white px-2 py-1 text-xs"
+                  >
+                    {DOCUMENT_KINDS.map((kind) => <option key={kind} value={kind}>{describeKind(kind)}</option>)}
+                  </select>
+                  <button type="button" onClick={() => setAttachment(null)} className="rounded-lg px-2 py-1 text-xs text-[var(--sr-clay)] hover:bg-white" aria-label="Remove attached document">Remove</button>
+                </div>
+              </div>
+              <p className="mt-1 text-[11px] text-[var(--sr-ink)]/60">
+                {attachment.candidates.length} amount/date candidate(s) found locally. Only these values and short source excerpts will be sent for review; the full text stays on this device.
+              </p>
+            </div>
+          )}
           <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
             <div className="flex items-center gap-1">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept={ACCEPTED}
-                className="sr-only"
-                aria-label="Attach a text or PDF file"
-                onChange={(e) => handleAttach(e.target.files?.[0])}
-              />
+              <input ref={fileInputRef} type="file" accept={ACCEPTED} className="sr-only" aria-label="Attach a text or PDF file" onChange={(e) => handleAttach(e.target.files?.[0])} />
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={attaching || disabled}
                 className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium text-[var(--sr-ink)]/70 transition hover:bg-[var(--sr-mist)] hover:text-[var(--sr-ink)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:opacity-50"
               >
-                <span aria-hidden="true">📎</span>
-                {attaching ? "Reading…" : "Attach"}
+                <span aria-hidden="true">📎</span>{attaching ? "Reading…" : attachment ? "Replace" : "Attach"}
               </button>
-              <span className="hidden text-[11px] text-[var(--sr-ink)]/40 sm:inline">
-                .txt / .pdf — text is extracted on your device
-              </span>
+              <span className="hidden text-[11px] text-[var(--sr-ink)]/40 sm:inline">.txt / .pdf — extracted on this device</span>
             </div>
             <div className="flex items-center gap-1.5">
               {streaming ? (
-                <button
-                  type="button"
-                  onClick={onStop}
-                  data-testid="stop-button"
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--sr-clay)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sr-clay)]/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-clay)]"
-                >
-                  <span aria-hidden="true">■</span> Stop
-                </button>
+                <button type="button" onClick={onStop} data-testid="stop-button" className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--sr-clay)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sr-clay)]/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-clay)]"><span aria-hidden="true">■</span> Stop</button>
               ) : (
                 <>
-                  {canRetry && (
-                    <button
-                      type="button"
-                      onClick={onRetry}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--sr-line)] px-3 py-2 text-sm font-medium text-[var(--sr-ink)]/70 transition hover:bg-[var(--sr-mist)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)]"
-                    >
-                      <span aria-hidden="true">↻</span> Retry
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={send}
-                    disabled={!trimmed || disabled}
-                    data-testid="send-button"
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--sr-pine)] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Send <span aria-hidden="true">↑</span>
-                  </button>
+                  {canRetry && <button type="button" onClick={onRetry} className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--sr-line)] px-3 py-2 text-sm font-medium text-[var(--sr-ink)]/70 transition hover:bg-[var(--sr-mist)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)]"><span aria-hidden="true">↻</span> Retry</button>}
+                  <button type="button" onClick={send} disabled={!canSend || disabled} data-testid="send-button" className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--sr-pine)] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-not-allowed disabled:opacity-40">Send <span aria-hidden="true">↑</span></button>
                 </>
               )}
             </div>
           </div>
         </div>
-        <p className="mt-1.5 text-center text-[11px] text-[var(--sr-ink)]/40">
-          Enter to send · Shift+Enter for a new line
-        </p>
+        <p className="mt-1.5 text-center text-[11px] text-[var(--sr-ink)]/40">Enter to send · Shift+Enter for a new line</p>
       </div>
     </div>
   );
