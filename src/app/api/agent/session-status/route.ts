@@ -1,0 +1,24 @@
+/**
+ * GET /api/agent/session-status?sessionId=...
+ *
+ * Lets the client tell whether a locally restored transcript still has a live
+ * server-side task. Task state is in-memory in this demo and is lost on a server
+ * restart, so stale transcripts must not present live clarification/apply controls.
+ */
+import { getTask } from "@/lib/agent/state";
+import { sessionIdError } from "@/lib/agent/session";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+export async function GET(req: Request): Promise<Response> {
+  const sessionId = new URL(req.url).searchParams.get("sessionId");
+  const error = sessionIdError(sessionId);
+  if (error) return Response.json({ active: false, error }, { status: 400 });
+
+  const task = getTask(sessionId as string);
+  return Response.json(
+    { active: Boolean(task), status: task?.status ?? null },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}

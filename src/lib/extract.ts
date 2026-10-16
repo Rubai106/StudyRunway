@@ -1,0 +1,188 @@
+/**
+ * Document evidence extraction (client-side, local-first).
+ *
+ * A PDF never leaves the browser: text is extracted locally with pdf.js and
+ * heuristic candidates (amounts, dates) are proposed for the user to review.
+ * Nothing is auto-accepted into the forecast — every candidate must be
+ * confirmed or corrected in the Evidence Ledger. Uploaded file bytes are
+ * never persisted; only confirmed facts are stored.
+ */
+
+export interface ExtractedCandidate {
+  label: string;
+  kind: "amount" | "date";
+  valueText: string;
+  amountMinor: number | null;
+  currency: string | null;
+  dateValue: string | null;
+  confidence: "high" | "medium" | "low";
+  page: number | null;
+}
+
+export class ExtractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExtractError";
+  }
+}
+
+const MONTHS: Record<string, string> = {
+  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+};
+
+const SYMBOL_TO_CODE: Record<string, string> = {
+  "£": "GBP", "$": "USD", "€": "EUR", "¥": "CNY", "₹": "INR", "৳": "BDT",
+};
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function validDate(y: number, m: number, d: number): string | null {
+  if (m < 1 || m > 12 || d < 1 || d > 31 || y < 1990 || y > 2100) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return `${y}-${pad2(m)}-${pad2(d)}`;
+}
+
+function parseNumber(raw: string): number | null {
+  const cleaned = raw.replace(/,/g, "");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Heuristic amount/date candidates from plain text. Pure + testable. */
+export function candidatesFromText(text: string): ExtractedCandidate[] {
+  const out: ExtractedCandidate[] = [];
+  const seen = new Set<string>();
+
+  const push = (c: ExtractedCandidate) => {
+    const key = `${c.kind}:${c.valueText}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(c);
+  };
+
+  // Amounts with symbols: £7,500.00 / ৳50,000
+  const symRe = /([£$€¥₹৳])\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g;
+  let m: RegExpExecArray | null;
+  while ((m = symRe.exec(text)) !== null && out.length < 40) {
+    const n = parseNumber(m[2]);
+    if (n == null || n <= 0 || n > 10_000_000) continue;
+    const code = SYMBOL_TO_CODE[m[1]] ?? "USD";
+    const minorUnits = code === "JPY" ? 0 : 2;
+    push({
+      label: `Amount (${code})`,
+      kind: "amount",
+      valueText: `${m[1]}${m[2]}`,
+      amountMinor: Math.round(n * 10 ** minorUnits),
+      currency: code,
+      dateValue: null,
+      confidence: m[2].includes(".") ? "high" : "medium",
+      page: null,
+    });
+  }
+
+  // Amounts with ISO codes: GBP 7500 / BDT 50000
+  const codeRe = /\b([A-Z]{3})\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\b/g;
+  while ((m = codeRe.exec(text)) !== null && out.length < 40) {
+    const code = m[1];
+    if (!/^(USD|EUR|GBP|BDT|INR|PKR|CNY|JPY|SGD|MYR|AUD|CAD|AED|SAR)$/.test(code)) continue;
+    const n = parseNumber(m[2]);
+    if (n == null || n <= 0 || n > 10_000_000) continue;
+    const minorUnits = code === "JPY" ? 0 : 2;
+    push({
+      label: `Amount (${code})`,
+      kind: "amount",
+      valueText: `${code} ${m[2]}`,
+      amountMinor: Math.round(n * 10 ** minorUnits),
+      currency: code,
+      dateValue: null,
+      confidence: "medium",
+      page: null,
+    });
+  }
+
+  // Dates: 2026-11-04, 04/11/2026, 4 Nov 2026
+  const isoRe = /\b(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/g;
+  while ((m = isoRe.exec(text)) !== null && out.length < 60) {
+    const iso = validDate(Number(m[1]), Number(m[2]), Number(m[3]));
+    if (iso) push({ label: "Date", kind: "date", valueText: m[0], amountMinor: null, currency: null, dateValue: iso, confidence: "high", page: null });
+  }
+  const dmyRe = /\b(0?[1-9]|[12]\d|3[01])[/-](0?[1-9]|1[0-2])[/-](20\d{2})\b/g;
+  while ((m = dmyRe.exec(text)) !== null && out.length < 60) {
+    const iso = validDate(Number(m[3]), Number(m[2]), Number(m[1]));
+    if (iso) push({ label: "Date", kind: "date", valueText: m[0], amountMinor: null, currency: null, dateValue: iso, confidence: "medium", page: null });
+  }
+  const textRe = /\b(0?[1-9]|[12]\d|3[01])\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(20\d{2})\b/gi;
+  while ((m = textRe.exec(text)) !== null && out.length < 60) {
+    const iso = validDate(Number(m[3]), Number(MONTHS[m[2].slice(0, 3).toLowerCase()]), Number(m[1]));
+    if (iso) push({ label: "Date", kind: "date", valueText: m[0], amountMinor: null, currency: null, dateValue: iso, confidence: "medium", page: null });
+  }
+
+  // Prefer amounts with decimals, then cap the list for reviewability.
+  const amounts = out.filter((c) => c.kind === "amount").slice(0, 8);
+  const dates = out.filter((c) => c.kind === "date").slice(0, 8);
+  return [...amounts, ...dates];
+}
+
+export interface PdfExtractResult {
+  pages: number;
+  chars: number;
+  candidates: ExtractedCandidate[];
+}
+
+/**
+ * Extract text from a PDF entirely in the browser. Throws ExtractError with
+ * a user-facing message on any failure (encrypted, scanned-image-only,
+ * corrupt, too large). Max 10 MB.
+ */
+export async function extractPdfFacts(file: File): Promise<PdfExtractResult> {
+  if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
+    throw new ExtractError("That doesn't look like a PDF. Please choose a .pdf file, or enter the figures manually.");
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    throw new ExtractError("The PDF is larger than 10 MB. Please use a smaller file or enter the figures manually.");
+  }
+
+  let pdfjs: typeof import("pdfjs-dist");
+  try {
+    pdfjs = await import("pdfjs-dist");
+  } catch {
+    throw new ExtractError("The document reader couldn't be loaded (it needs pdfjs-dist). You can still enter the figures manually.");
+  }
+
+  try {
+    // Worker is bundled with the app (public/pdf.worker.min.mjs), so
+    // extraction works fully offline. It still runs locally in this browser.
+    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+    const buf = await file.arrayBuffer();
+    const doc = await pdfjs.getDocument({ data: buf, isEvalSupported: false }).promise;
+    const pages = doc.numPages;
+    if (pages > 60) throw new ExtractError(`This PDF has ${pages} pages — please use the shorter letter or invoice instead.`);
+
+    let text = "";
+    for (let p = 1; p <= pages; p++) {
+      const page = await doc.getPage(p);
+      const content = await page.getTextContent();
+      const pageText = (content.items as { str?: string }[]).map((it) => it.str ?? "").join(" ");
+      text += `\n[page ${p}]\n${pageText}`;
+    }
+    await doc.destroy();
+
+    if (text.replace(/\s/g, "").length < 40) {
+      throw new ExtractError("No readable text was found — this looks like a scanned image. Enter the figures manually (or use a text-based PDF).");
+    }
+    const candidates = candidatesFromText(text);
+    return { pages, chars: text.length, candidates };
+  } catch (e) {
+    if (e instanceof ExtractError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/password|encrypt/i.test(msg)) {
+      throw new ExtractError("This PDF is password-protected. Please use an unprotected copy or enter the figures manually.");
+    }
+    throw new ExtractError(`Couldn't read that PDF (${msg.slice(0, 120)}). You can enter the figures manually instead.`);
+  }
+}

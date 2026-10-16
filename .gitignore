@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Build / framework output
+.next/
+out/
+build/
+
+# Test and coverage artifacts
+coverage/
+test-results/
+playwright-report/
+
+# Environment files (keep template only)
+.env
+.env.local
+.env.*
+!.env.example
+
+# Caches and generated metadata
+.cache/
+.turbo/
+.parcel-cache/
+.eslintcache
+*.tsbuildinfo
+next-env.d.ts
+
+# Deployment
+.vercel/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# Temporary archives and local backups
+*.zip
+*.bak
+*.tmp
+*.temp
+*.orig
+*~
+*.swp
+
+# Local dependency backup files
+*.before-security-update-*
+package.json.before-*
+package-lock.json.before-*
+
+# Secrets / certificates
+*.pem

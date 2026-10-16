@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * StudyRunway identity: calm paper-and-pine.
+ * Warm paper background, deep green-ink text, pine as the single action
+ * color, amber for caution/estimates, clay for errors. Deliberately not a
+ * fintech-neon palette — this is money plus stressed students.
+ */
+:root {
+  --sr-paper: #f7f4ec;
+  --sr-ink: #1f2a26;
+  --sr-pine: #2e6b50;
+  --sr-amber: #b97a1f;
+  --sr-clay: #b0442e;
+  --sr-mist: #e9e2d2;
+  --sr-line: #ddd5c2;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family:
+    "Inter",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  background-color: var(--sr-paper);
+  color: var(--sr-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Typing / working indicator dots */
+.status-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.status-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: sr-dot 1.2s ease-in-out infinite;
+}
+.status-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.status-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes sr-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* Visible focus everywhere — keyboard users must always see where they are */
+:focus-visible {
+  outline: 2px solid var(--sr-pine);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Honor reduced motion: no dot bounce, no smooth-scroll jump */
+@media (prefers-reduced-motion: reduce) {
+  .status-dots span {
+    animation: none;
+    opacity: 0.6;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Slim, calm scrollbars in the conversation pane */
+[role="log"]::-webkit-scrollbar {
+  width: 8px;
+}
+[role="log"]::-webkit-scrollbar-thumb {
+  background: var(--sr-line);
+  border-radius: 8px;
+}
