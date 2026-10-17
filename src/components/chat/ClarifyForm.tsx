@@ -242,16 +242,32 @@ export default function ClarifyForm({
       )}
 
       {question.kind === "currency" && (
-        <div className="mt-3">
-          <label htmlFor={`clarify-cur-${question.id}`} className="sr-only">
+        <form
+          className="mt-3"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleSubmit();
+          }}
+        >
+          <label
+            htmlFor={`clarify-cur-${question.id}`}
+            className="sr-only"
+          >
             {question.prompt}
           </label>
+
           <select
             id={`clarify-cur-${question.id}`}
             value={values["currency"] ?? ""}
             onChange={(e) => set("currency", e.target.value)}
             className={`${inputClass} max-w-xs`}
             aria-invalid={!!errors["currency"]}
+            aria-describedby={
+              errors["currency"]
+                ? `clarify-cur-${question.id}-err`
+                : undefined
+            }
           >
             <option value="">Choose a currency…</option>
             {currencyOptionsForQuestion(question).map((c) => (
@@ -260,11 +276,15 @@ export default function ClarifyForm({
               </option>
             ))}
           </select>
-          {renderFieldError("currency")}
+
+          <span id={`clarify-cur-${question.id}-err`}>
+            {renderFieldError("currency")}
+          </span>
+
           <div>
             <SubmitButton submitting={submitting} />
           </div>
-        </div>
+        </form>
       )}
 
       {question.kind === "form" && (
