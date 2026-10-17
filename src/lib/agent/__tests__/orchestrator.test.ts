@@ -96,6 +96,7 @@ function calcTool(): ToolDefinition {
     description: "Doubles a number deterministically.",
     parameters: z.object({ x: z.number() }),
     requiresApproval: false,
+    safeToReplayForVerification: true,
     handler: async (args): Promise<ToolResult> => {
       const x = args["x"] as number;
       return {
@@ -292,7 +293,7 @@ describe("model-driven loop", () => {
     expect(getTask("s-appr")?.approvals[0]?.decision).toBe("denied");
   });
 
-  it("resumes and executes after approval is granted", async () => {
+  it("resumes an approved action once and does not replay it during verification", async () => {
     const handler = vi.fn(async (): Promise<ToolResult> => ({ ok: true, summary: "approved-run" }));
     const approvalTool: ToolDefinition = {
       name: "approval_tool",
@@ -318,9 +319,47 @@ describe("model-driven loop", () => {
       runAgent({ sessionId: "s-appr2", message: "", tools: [PING_TOOL, approvalTool], provider })
     );
     expectValidEvents(events);
-    // approved execution + verification re-run
-    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(events.some((event) => event.type === "tool_call_start" && event.label === "Verification re-run")).toBe(false);
+    const result = events.find((event) => event.type === "result");
+    expect(result?.type === "result" && result.data).toMatchObject({
+      verified: null,
+      verifyNote: expect.stringContaining("not independently re-run"),
+    });
     expect(getTask("s-appr2")?.status).toBe("done");
+  });
+
+  it("does not replay live policy research as an independent verification", async () => {
+    const handler = vi.fn(async (): Promise<ToolResult> => ({ ok: true, summary: "Official policy claim with citation." }));
+    const researchTool: ToolDefinition = {
+      name: "research_policy",
+      description: "Looks up current policy pages.",
+      parameters: z.object({ query: z.string() }),
+      requiresApproval: false,
+      handler,
+    };
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "c1", name: "research_policy", args: { query: "tuition deadlines" } }]),
+      textOnly("No further research needed."),
+      textOnly("The official page says to confirm the current deadline."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-live-research-no-replay",
+      message: "Find the university's tuition instalment policy",
+      tools: [PING_TOOL, researchTool],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(events.some((event) => event.type === "tool_call_start" && event.label === "Verification re-run")).toBe(false);
+    const result = events.find((event) => event.type === "result");
+    expect(result?.type === "result" && result.data).toMatchObject({
+      verified: null,
+      verifyNote: expect.stringContaining("live data"),
+    });
   });
 
   it("retries once on transient failure", async () => {
@@ -474,6 +513,7 @@ describe("model-driven loop", () => {
     expect(submitAnswers("s-cl", "q_currency", "GBP").ok).toBe(true);
     expect(getTask("s-cl")?.confirmedFacts.find((f) => f.key === "q_currency")).toMatchObject({
       value: "GBP",
+      question: "Which currency should I plan in?",
       source: "user",
     });
 
@@ -706,6 +746,22 @@ describe("demo mode (no provider key)", () => {
 
 describe("executeToolCall unit behaviour", () => {
   const ctx = { sessionId: "s", taskId: "t" };
+  it("gives Google Search policy research enough time to return citations", async () => {
+    const research: ToolDefinition = {
+      name: "research_policy",
+      description: "scripted grounded research",
+      parameters: z.object({}),
+      requiresApproval: false,
+      handler: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return { ok: true, summary: "verified" };
+      },
+    };
+    const executed = await executeToolCall(research, {}, ctx, 5);
+    expect(executed.result.summary).toBe("verified");
+    expect(executed.attempts).toBe(1);
+  });
+
   it("does not retry non-transient errors", async () => {
     let calls = 0;
     const bad = {

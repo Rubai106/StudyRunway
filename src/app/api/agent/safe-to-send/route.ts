@@ -1,5 +1,9 @@
 import { sessionIdError, requestOriginError } from "@/lib/agent/session";
-import { getSafeToSendExecutionRecord, runSafeToSendAction } from "@/lib/tools/safeToSend";
+import {
+  getSafeToSendActionApprovalAck,
+  getSafeToSendExecutionRecord,
+  runSafeToSendAction,
+} from "@/lib/tools/safeToSend";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -70,18 +74,15 @@ export async function POST(req: Request): Promise<Response> {
       ? (body.payload as Record<string, unknown>)
       : {};
 
-  if (action === "simulate") {
-    const ack = payload["approvalAck"];
-    if (ack !== "I_APPROVE_SIMULATION") {
-      return Response.json(
-        {
-          ok: false,
-          error:
-            "Explicit approval is required. Provide payload.approvalAck = 'I_APPROVE_SIMULATION'.",
-        },
-        { status: 400 },
-      );
-    }
+  const requiredApprovalAck = getSafeToSendActionApprovalAck(action);
+  if (requiredApprovalAck && payload["approvalAck"] !== requiredApprovalAck) {
+    return Response.json(
+      {
+        ok: false,
+        error: `Explicit approval is required for ${action}. Confirm the action in the app and retry.`,
+      },
+      { status: 400 },
+    );
   }
 
   const result = await runSafeToSendAction(sessionId, action, payload);

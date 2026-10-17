@@ -36,6 +36,7 @@ export const extractDocumentTool: ToolDefinition = {
     "nothing is auto-accepted into the plan.",
   parameters: ExtractDocumentParams,
   requiresApproval: false,
+  safeToReplayForVerification: true,
   handler: async (args, ctx) =>
     withToolTimeout("extract_document", (): ToolResult => {
       const parsed = ExtractDocumentParams.safeParse(args);

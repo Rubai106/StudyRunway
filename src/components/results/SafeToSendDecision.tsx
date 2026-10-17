@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatMinor } from "@/lib/currency";
 import { Disclosure, asArray, asString, isRecord } from "./shared";
+import { SAFE_TO_SEND_ACTION_ACKS } from "@/lib/tools/safeToSendApproval";
 
 function money(minor: unknown, currency: unknown): string {
   if (typeof minor !== "number" || !Number.isInteger(minor)) return "—";
@@ -16,7 +17,9 @@ function money(minor: unknown, currency: unknown): string {
 }
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 function tone(status: string): { label: string; cls: string } {
@@ -283,7 +286,7 @@ export default function SafeToSendDecision({
               if (!ok) return;
               await action("simulate", {
                 ...simulationApproval,
-                approvalAck: "I_APPROVE_SIMULATION",
+                approvalAck: SAFE_TO_SEND_ACTION_ACKS.simulate,
               });
             }}
           >
@@ -293,7 +296,12 @@ export default function SafeToSendDecision({
             type="button"
             disabled={!sessionId || !!busy}
             className="rounded-lg border border-[var(--sr-line)] px-3 py-1.5 disabled:opacity-50"
-            onClick={() => action("revert_simulation", {})}
+            onClick={() => {
+              if (!window.confirm("Approve reverting the latest sandbox-only simulation from this forecast? No real payment will be changed.")) return;
+              void action("revert_simulation", {
+                approvalAck: SAFE_TO_SEND_ACTION_ACKS.revert_simulation,
+              });
+            }}
           >
             Revert latest simulation
           </button>
@@ -411,13 +419,18 @@ export default function SafeToSendDecision({
                     type="button"
                     className="mt-2 rounded-lg border border-[var(--sr-line)] px-2.5 py-1.5 disabled:opacity-50"
                     disabled={!sessionId || !!busy}
-                    onClick={() =>
-                      action("confirm_funding_receipt", {
+                    onClick={() => {
+                      const receivedDate = todayIso();
+                      const receivedAmountMinor = f["expectedAmountMinor"];
+                      const receivedAmount = money(receivedAmountMinor, f["currency"]);
+                      if (!window.confirm(`Confirm that you received ${receivedAmount} from ${asString(f["label"])} on ${receivedDate}? This updates your forecast only.`)) return;
+                      void action("confirm_funding_receipt", {
                         fundingId: asString(f["id"]),
-                        receivedAmountMinor: f["expectedAmountMinor"],
-                        receivedDate: todayIso(),
-                      })
-                    }
+                        receivedAmountMinor,
+                        receivedDate,
+                        approvalAck: SAFE_TO_SEND_ACTION_ACKS.confirm_funding_receipt,
+                      });
+                    }}
                   >
                     Mark full amount received today
                   </button>

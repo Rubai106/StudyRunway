@@ -31,6 +31,8 @@ export default function PolicyResearch({ data }: { data: Record<string, unknown>
   const answer = asString(data["answer"]);
   const note = asString(data["note"]);
   const checkedAt = asString(data["checkedAt"]);
+  const isCreditGuide = data["topic"] === "credit_building";
+  const country = asString(data["country"]);
   const sources = readSources(data["sources"]);
   const claims: SupportedClaim[] = asArray<unknown>(data["supportedClaims"]).flatMap((raw) => {
     if (!isRecord(raw) || !asString(raw["text"])) return [];
@@ -40,17 +42,17 @@ export default function PolicyResearch({ data }: { data: Record<string, unknown>
 
   return (
     <div>
-      {answer ? (
-        <p className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--sr-ink)]">{answer}</p>
-      ) : (
-        <p className="text-sm font-medium text-[var(--sr-ink)]">No verified policy answer is available for this request.</p>
+      {isCreditGuide && (
+        <div className="mb-3 rounded-xl border border-[var(--sr-amber)]/35 bg-[var(--sr-amber)]/5 px-3 py-2.5">
+          <p className="text-xs font-bold text-[var(--sr-ink)]">Destination guide{country ? ` · ${country}` : ""}</p>
+          <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/70">
+            General information only, not an eligibility decision or a lending recommendation. Requirements vary by provider and student or immigration status. Confirm them with the linked official sources; approval is never guaranteed.
+          </p>
+        </div>
       )}
-      {note && <p className="mt-2 text-xs leading-relaxed text-[var(--sr-ink)]/65">{note}</p>}
-      {checkedAt && <p className="mt-2 text-[11px] text-[var(--sr-ink)]/50">Sources checked: {checkedDate(checkedAt)}</p>}
-
-      {claims.length > 0 && (
-        <div className="mt-4 space-y-2">
-          <h4 className="text-xs font-bold uppercase tracking-wide text-[var(--sr-ink)]/60">Claims and supporting sources</h4>
+      {claims.length > 0 ? (
+        <div className="mt-1 space-y-2">
+          <h4 className="text-xs font-bold uppercase tracking-wide text-[var(--sr-ink)]/60">Verified claims and supporting sources</h4>
           {claims.map((claim, index) => (
             <div key={`${claim.text}-${index}`} className="rounded-xl border border-[var(--sr-line)] bg-white/50 px-3 py-2.5">
               <p className="text-sm leading-relaxed text-[var(--sr-ink)]">{claim.text}</p>
@@ -60,7 +62,13 @@ export default function PolicyResearch({ data }: { data: Record<string, unknown>
             </div>
           ))}
         </div>
+      ) : answer ? (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--sr-ink)]">{answer}</p>
+      ) : (
+        <p className="text-sm font-medium text-[var(--sr-ink)]">No verified policy answer is available for this request.</p>
       )}
+      {note && <p className="mt-2 text-xs leading-relaxed text-[var(--sr-ink)]/65">{note}</p>}
+      {checkedAt && <p className="mt-2 text-[11px] text-[var(--sr-ink)]/50">Sources checked: {checkedDate(checkedAt)}</p>}
 
       {sources.length > 0 && (
         <div className="mt-4">

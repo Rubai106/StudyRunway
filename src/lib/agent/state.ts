@@ -51,6 +51,8 @@ export type ClarifyQuestion = z.infer<typeof ClarifyQuestionSchema>;
 const FactSchema = z.object({
   key: z.string().min(1).max(120),
   value: z.string().min(1).max(1000),
+  /** Original clarification prompt, when this fact came from a user's answer. */
+  question: z.string().max(300).optional(),
   /** Where the fact came from: "user" | "tool:<name>" | "model". */
   source: z.string().min(1).max(120),
 });

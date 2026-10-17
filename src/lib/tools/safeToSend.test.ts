@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { getTask, clearStore, updateTask } from "@/lib/agent/state";
 import { buildSamplePlan } from "@/lib/sample";
-import { runSafeToSendAction } from "@/lib/tools/safeToSend";
+import { getSafeToSendApprovalActions, runSafeToSendAction } from "@/lib/tools/safeToSend";
+import { SAFE_TO_SEND_ACTION_ACKS } from "@/lib/tools/safeToSendApproval";
 
 function seedHighHeadroomPlan(sessionId: string): void {
   const sample = buildSamplePlan();
@@ -21,6 +22,12 @@ function seedHighHeadroomPlan(sessionId: string): void {
 }
 
 describe("safe-to-send deterministic action invariants", () => {
+  it("has an explicit route acknowledgment for every approval-gated action", () => {
+    expect(getSafeToSendApprovalActions()).toEqual(
+      Object.keys(SAFE_TO_SEND_ACTION_ACKS).sort(),
+    );
+  });
+
   it("keeps decision id stable across identical recalculations", async () => {
     const sid = "sts_decision_stable";
     seedHighHeadroomPlan(sid);

@@ -904,6 +904,7 @@ describe("S12 — multi-tool task: clarify → chain tools → verify → rechec
       description: `Deterministic scripted ${name} for the chain test.`,
       parameters: z.object({ x: z.number() }),
       requiresApproval: false,
+      safeToReplayForVerification: true,
       handler: async (args): Promise<ToolResult> => {
         const x = args["x"] as number;
         return {

@@ -214,6 +214,7 @@ export const simulateScenarioTool: ToolDefinition = {
     "The input plan is never mutated. Optional user-stated funding and tuition installment options are simulated independently against the stress case, with the remaining gap calculated for each. Installment approval and backup-fund availability are never presumed.",
   parameters: SimulateScenarioParams,
   requiresApproval: false,
+  safeToReplayForVerification: true,
   handler: async (args, ctx) =>
     withToolTimeout("simulate_scenario", (): ToolResult => {
       const parsed = SimulateScenarioParams.safeParse(args);

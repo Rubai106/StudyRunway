@@ -60,6 +60,7 @@ export const buildActionPlanTool: ToolDefinition = {
     "by the deterministic engine.",
   parameters: BuildActionPlanParams,
   requiresApproval: false,
+  safeToReplayForVerification: true,
   handler: async (args, ctx) =>
     withToolTimeout("build_action_plan", (): ToolResult => {
       const parsed = BuildActionPlanParams.safeParse(args);

@@ -4,7 +4,7 @@ import { WORLD_BANK_REMITTANCE_BENCHMARK, compareTransfersTool } from "@/lib/too
 import { buildActionPlanTool } from "@/lib/tools/buildActionPlan";
 import { extractDocumentTool } from "@/lib/tools/extractDocument";
 import { simulateScenarioTool } from "@/lib/tools/simulateScenario";
-import { isOfficialPolicyDomain, ResearchPolicyParams, runGroundedPolicyResearch } from "@/lib/tools/researchPolicy";
+import { isOfficialPolicyDomain, RESEARCH_POLICY_REQUEST_TIMEOUT_MS, ResearchPolicyParams, resolveResearchInputFromUserRequest, runGroundedPolicyResearch } from "@/lib/tools/researchPolicy";
 import { executeToolCall } from "@/lib/agent/orchestrator";
 import type { ToolContext } from "@/lib/agent/tools";
 import type { ToolPlanInput } from "@/lib/tools/common";
@@ -98,7 +98,7 @@ describe("feature completion regressions", () => {
     const input = ResearchPolicyParams.parse({ query: "Tuition due date", topic: "tuition", country: "Ireland", institution: "Example University" });
     const response = {
       candidates: [{
-        content: { parts: [{ text: "Tuition is due before registration." }] },
+        content: { parts: [{ text: "Tuition is due before registration. Every student automatically receives a 50% scholarship." }] },
         groundingMetadata: {
           groundingChunks: [{ web: { uri: "https://www.example.ac.uk/fees", title: "Official fees", domain: "www.example.ac.uk" } }],
           groundingSupports: [{ segment: { text: "Tuition is due before registration." }, groundingChunkIndices: [0] }],
@@ -112,9 +112,14 @@ describe("feature completion regressions", () => {
       tokenSource: async () => "test-token",
       checkedAt: "2026-10-16T00:00:00.000Z",
       model: "gemini-2.5-flash",
-      fetchJson: async () => response,
+      fetchJson: async (_url, options) => {
+        expect(options.timeoutMs).toBe(RESEARCH_POLICY_REQUEST_TIMEOUT_MS);
+        expect((options.body as { generationConfig: { temperature: number } }).generationConfig.temperature).toBe(0);
+        return response;
+      },
     });
-    expect(official.answer).toContain("registration");
+    expect(official.answer).toBe("Tuition is due before registration.");
+    expect(official.answer).not.toContain("50% scholarship");
     expect(official.checkedAt).toBe("2026-10-16T00:00:00.000Z");
     expect((official.sources as { uri: string }[])[0].uri).toBe("https://www.example.ac.uk/fees");
     expect((official.supportedClaims as unknown[]).length).toBe(1);
@@ -134,6 +139,72 @@ describe("feature completion regressions", () => {
     expect(forged.answer).toBeNull();
     expect(isOfficialPolicyDomain("example.ac.uk")).toBe(true);
     expect(isOfficialPolicyDomain("example.com")).toBe(false);
+  });
+
+  it("withholds official-page text when Google provides no claim-level citation", async () => {
+    const input = ResearchPolicyParams.parse({ query: "Tuition due date", topic: "tuition", country: "Ireland", institution: "Example University" });
+    const result = await runGroundedPolicyResearch(input, {
+      projectId: "example-project",
+      location: "global",
+      tokenSource: async () => "test-token",
+      model: "gemini-2.5-flash",
+      fetchJson: async () => ({
+        candidates: [{
+          content: { parts: [{ text: "Tuition is due before registration." }] },
+          groundingMetadata: {
+            groundingChunks: [{ web: { uri: "https://www.example.ac.uk/fees", title: "Official fees", domain: "www.example.ac.uk" } }],
+          },
+        }],
+      }),
+    });
+    expect(result.answer).toBeNull();
+    expect(result.note).toContain("no claim-level citations");
+  });
+
+  it("does not treat model-invented research locations or domains as user-confirmed", () => {
+    const modelInput = ResearchPolicyParams.parse({
+      query: "tuition deadlines",
+      topic: "tuition",
+      country: "Australia",
+      institution: "Example University",
+      officialDomain: "fake-example.com",
+    });
+    expect(resolveResearchInputFromUserRequest(modelInput, "What is my university's tuition deadline?")).toMatchObject({
+      country: "",
+      institution: "",
+      officialDomain: "",
+    });
+
+    expect(resolveResearchInputFromUserRequest(modelInput, "Institution: Example University\nCountry: Australia\nOfficial domain: example.com")).toMatchObject({
+      country: "Australia",
+      institution: "Example University",
+      officialDomain: "example.com",
+    });
+
+    expect(resolveResearchInputFromUserRequest(
+      { ...modelInput, country: "in", institution: "Example University" },
+      "I am an international student asking about tuition.",
+    )).toMatchObject({ country: "", institution: "", officialDomain: "" });
+  });
+
+  it("uses country, institution, and domain only from explicitly answered user clarifications", () => {
+    const modelInput = ResearchPolicyParams.parse({
+      query: "tuition deadline",
+      topic: "tuition",
+      country: "Australia",
+      institution: "Example University",
+      officialDomain: "example.edu",
+    });
+    const confirmedFacts = [
+      { key: "q-country", source: "user", question: "Which country will you study in?", value: "Australia" },
+      { key: "q-university", source: "user", question: "Which university?", value: "Example University" },
+      { key: "q-domain", source: "user", question: "What is its official domain?", value: "example.edu" },
+    ];
+    expect(resolveResearchInputFromUserRequest(modelInput, "Can you research my tuition deadline?", confirmedFacts)).toMatchObject({
+      country: "Australia",
+      institution: "Example University",
+      officialDomain: "example.edu",
+    });
   });
 
   it("includes the period-labeled World Bank benchmark without implying a live quote", async () => {

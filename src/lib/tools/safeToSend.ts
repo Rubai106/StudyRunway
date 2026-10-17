@@ -12,6 +12,7 @@ import { formatMinor } from "@/lib/currency";
 import { type Obligation } from "@/lib/model";
 import { assemblePlanState, ToolPlanSchema, withToolTimeout, zodIssues } from "./common";
 import type { ToolDefinition, ToolResult } from "./types";
+import { SAFE_TO_SEND_ACTION_ACKS } from "./safeToSendApproval";
 import {
   DelayScenarioSchema,
   IncomingFundingRecordSchema,
@@ -1225,6 +1226,20 @@ const ACTIONS: Record<string, ToolDefinition> = {
   simulate: simulateSafeToSendPaymentTool,
   revert_simulation: revertSafeToSendSimulationTool,
 };
+
+export function getSafeToSendApprovalActions(): string[] {
+  return Object.entries(ACTIONS)
+    .filter(([, tool]) => tool.requiresApproval)
+    .map(([action]) => action)
+    .sort();
+}
+
+export function getSafeToSendActionApprovalAck(action: string): string | null {
+  const tool = ACTIONS[action];
+  if (!tool?.requiresApproval) return null;
+  return SAFE_TO_SEND_ACTION_ACKS[action as keyof typeof SAFE_TO_SEND_ACTION_ACKS]
+    ?? `I_APPROVE_${action.toUpperCase()}`;
+}
 
 export function getSafeToSendExecutionRecord(
   sessionId: string,

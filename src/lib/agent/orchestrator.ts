@@ -3,9 +3,9 @@
  *
  * The loop: validate input → load state → model understands the goal →
  * identify missing info → emit clarification (pause) → plan → select and call
- * allow-listed tools (args validated with zod, ~15s per-tool timeout, max ~8
+ * allow-listed tools (args validated with zod, bounded per-tool timeouts, max ~8
  * calls per task, 1 retry on transient failure) → validate results → replan
- * if needed → independent verification step for critical figures → outcome.
+ * if needed → replay verification for explicitly safe calculations → outcome.
  *
  * Approval gates: a tool with `requiresApproval` pauses the loop and emits a
  * `clarify` event asking the user to Approve/Deny. /api/agent/answer resumes.
@@ -50,6 +50,7 @@ import {
   extractFundingGapInputFromText,
   fundingGapInputFromPlan,
 } from "../tools/analyzeFundingGap";
+import { RESEARCH_POLICY_TOOL_TIMEOUT_MS } from "../tools/researchPolicy";
 import { ISO_DATE, todayISO } from "../model";
 
 // ---------------------------------------------------------------------------
@@ -222,7 +223,7 @@ export interface RunAgentOptions {
   provider?: Provider | null;
   /** Client abort signal (stop button). */
   signal?: AbortSignal;
-  /** Per-tool timeout in ms (default 15_000). */
+  /** Per-tool timeout in ms (default 15_000; policy research has a 65_000 minimum). */
   toolTimeoutMs?: number;
   /** Max tool calls per task (default 8). */
   maxToolCalls?: number;
@@ -441,7 +442,11 @@ export async function executeToolCall(
     try {
       const result = await withTimeout(
         tool.handler(parsed, ctx),
-        toolTimeoutMs,
+        tool.name === "research_policy"
+          // Leave headroom beyond the tool's own 60s timer so it can return a
+          // typed timeout result instead of racing this outer cancellation.
+          ? Math.max(toolTimeoutMs, RESEARCH_POLICY_TOOL_TIMEOUT_MS + 5_000)
+          : toolTimeoutMs,
         `tool ${tool.name}`
       );
       return { result, durationMs: Date.now() - t0, attempts: attempt };
@@ -458,10 +463,11 @@ export async function executeToolCall(
 // Model interaction helpers.
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are StudyRunway, an AI financial-readiness assistant for international students. You help the user plan the money side of studying abroad: runway forecasts, funding evidence, transfer quotes, and what-if scenarios.
+const SYSTEM_PROMPT = `You are StudyRunway, an AI financial-readiness assistant for international students. You help the user plan the money side of studying abroad: runway forecasts, funding evidence, transfer quotes, what-if scenarios, and source-backed guidance on starting a local credit history.
 
 How you work:
-- Stay within international student-finance tasks: study costs and tuition, student budgets/runway, funding gaps, scholarships and loans, proof of funds, student-finance documents, tuition instalments, and cross-border education payments/transfers. Do not answer unrelated requests; briefly redirect to these topics.
+- Stay within international student-finance tasks: study costs and tuition, student budgets/runway, funding gaps, scholarships and loans, proof of funds, student-finance documents, tuition instalments, cross-border education payments/transfers, and destination-specific credit-history basics for students. Do not answer unrelated requests; briefly redirect to these topics.
+- For a credit-building guide, use research_policy with topic=credit_building and the confirmed destination country. Keep it educational: cite the official sources returned by the tool, state eligibility limits and uncertainty clearly, avoid recommending borrowing/products, and never imply the user will qualify or get approved. If no country is confirmed, ask first.
 - You NEVER invent financial figures. Every number you report must come from a tool result.
 - You may only call the tools listed for you. Never invent a tool name.
 - For tuition-payment safety decisions, use the Safe-to-Send tools to collect structured inputs, recalculate deterministic status, and request simulation only after explicit approval.
@@ -1367,12 +1373,21 @@ async function* runModelFlow(
   yield { type: "status", phase: "verifying" };
   checkAbort(opts.signal);
   let verified: boolean | null = null;
-  let verifyNote = "No tool calls were made, so there was nothing to verify.";
-  // Independent verification: recompute the last successful data-producing
-  // tool call via a second execution and compare the structured output.
+  let verifyNote = "No deterministic calculation was available for replay verification.";
+  // Replay only tools that explicitly declare themselves deterministic and
+  // side-effect-free. Re-running live research, approval-gated actions, or
+  // stateful Safe-to-Send tools can produce misleading results or mutate state.
   const lastOk = [...state.toolCalls].reverse().find((c) => c.ok);
   const verifyTool = lastOk ? findTool(tools, lastOk.tool) : undefined;
-  if (lastOk && verifyTool && toolCallCount < opts.maxToolCalls) {
+  if (
+    lastOk &&
+    verifyTool &&
+    (!verifyTool.safeToReplayForVerification || verifyTool.requiresApproval)
+  ) {
+    verifyNote = `Verification skipped for "${verifyTool.name}" because it may depend on live data, require approval, or change task state. It was not independently re-run.`;
+  } else if (lastOk && verifyTool && toolCallCount >= opts.maxToolCalls) {
+    verifyNote = "Verification skipped because the tool-call limit was reached. The result was not independently re-run.";
+  } else if (lastOk && verifyTool && verifyTool.safeToReplayForVerification) {
     const callId = rid("verify");
     yield {
       type: "tool_call_start",
@@ -1444,7 +1459,7 @@ async function* runModelFlow(
               `\n\nTool results this task:\n${conversation
                 .filter((m) => m.role === "tool")
                 .map((m) => `- ${m.content}`)
-                .join("\n")}\n\nSummarise the outcome for the user in plain, verdict-first language (max 150 words). Every figure must come from the tool results above. If verification flagged figures as provisional, say so.`,
+                .join("\n")}\n\nSummarise the outcome for the user in plain, verdict-first language (max 150 words). Every figure must come from the tool results above. If verification found a mismatch, say the figures are provisional. If verification was skipped, do not imply an independent re-check occurred; say so when relevant.`,
           },
         ],
         []
@@ -1822,7 +1837,7 @@ export function submitAnswers(
       pendingQuestions: remaining,
       confirmedFacts: [
         ...state.confirmedFacts,
-        { key: q.id, value: value.slice(0, 1000), source: "user" },
+        { key: q.id, value: value.slice(0, 1000), question: q.prompt, source: "user" },
       ],
       status: remaining.length > 0 ? "clarifying" : "planning",
     });

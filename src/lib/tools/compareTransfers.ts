@@ -84,6 +84,7 @@ export const compareTransfersTool: ToolDefinition = {
     "labelled reference estimate, never a live quote. Missing fees are never treated as zero.",
   parameters: CompareTransfersParams,
   requiresApproval: false,
+  safeToReplayForVerification: true,
   handler: async (args, ctx) =>
     withToolTimeout("compare_transfers", (): ToolResult => {
       const parsed = CompareTransfersParams.safeParse(args);

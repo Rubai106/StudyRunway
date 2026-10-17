@@ -80,6 +80,7 @@ export const buildLivingCostPlanTool: ToolDefinition = {
     "about living costs, cost of living, or a destination budget.",
   parameters: LivingCostPlanInputsSchema,
   requiresApproval: false,
+  safeToReplayForVerification: true,
   handler: async (args, ctx) =>
     withToolTimeout("build_living_cost_plan", (): ToolResult => {
       const parsed = LivingCostPlanInputsSchema.safeParse(args);

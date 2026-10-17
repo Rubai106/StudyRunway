@@ -300,6 +300,7 @@ export const analyzeFundingGapTool: ToolDefinition = {
     "provided an exchange rate; never estimate one. If required data is missing, ask instead of guessing.",
   parameters: AnalyzeFundingGapParams,
   requiresApproval: false,
+  safeToReplayForVerification: true,
   handler: async (args) =>
     withToolTimeout("analyze_funding_gap", (): ToolResult => {
       const parsed = AnalyzeFundingGapParams.safeParse(args);
@@ -380,6 +381,40 @@ function analyzePlan(plan: ToolPlanInput): ToolResult {
             uncertainInflow: formatMinor(f.totalUncertainInflowMinor, pc),
             totalOutflowMinor: f.totalOutflowMinor,
             totalOutflow: formatMinor(f.totalOutflowMinor, pc),
+          },
+          // Preserve the user-provided original-currency records for the
+          // dashboard. Do not replace these with converted forecast totals.
+          cashFlow: {
+            planningCurrency: pc,
+            asOfDate: f.today,
+            fundingSources: state.fundingSources.map((source) => ({
+              id: source.id,
+              label: source.label,
+              kind: source.kind,
+              amountMinor: source.amountMinor,
+              currency: source.currency,
+              status: source.status,
+              availableDate: source.availableDate,
+              expectedDate: source.expectedDate,
+            })),
+            bills: state.obligations
+              .filter((obligation) => obligation.status !== "paid")
+              .map((obligation) => ({
+                id: obligation.id,
+                label: obligation.label,
+                kind: obligation.kind,
+                amountMinor: obligation.amountMinor,
+                currency: obligation.currency,
+                dueDate: obligation.dueDate,
+                recurring: obligation.recurring,
+                status: obligation.status,
+              })),
+            fxAssumptions: Object.entries(state.fx.rates).map(([pair, rate]) => ({
+              pair,
+              rate,
+              asOf: state.fx.asOf,
+              source: state.fx.source,
+            })),
           },
           incomplete: f.incomplete.map((i) => ({ label: i.label, reason: i.reason })),
           assumptionsUsed: f.assumptionsUsed,

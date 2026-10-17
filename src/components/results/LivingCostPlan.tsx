@@ -37,6 +37,7 @@ import {
   type PlanVerdict,
 } from "@/lib/livingCosts";
 import { convertMinor, toMajor, toMinor } from "@/lib/money";
+import { BUDGET_ACTION_ACKS } from "@/lib/budgetApproval";
 
 interface Props {
   data: Record<string, unknown>;
@@ -333,6 +334,7 @@ export default function LivingCostPlan({ data, sessionId }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId,
+          approvalAck: BUDGET_ACTION_ACKS.apply,
           plan: activePlan,
           planInputs: activeInputs,
           startDate,
@@ -361,7 +363,7 @@ export default function LivingCostPlan({ data, sessionId }: Props) {
     }
   };
 
-  const doRevert = async () => {
+  const doRevert = async (approvalAck: string) => {
     if (!sessionId) return;
     setApplyPhase("working");
     setApplyError(null);
@@ -369,7 +371,7 @@ export default function LivingCostPlan({ data, sessionId }: Props) {
       const res = await fetch("/api/agent/budget-revert", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
+        body: JSON.stringify({ sessionId, approvalAck }),
       });
       const body = (await res.json()) as Record<string, unknown>;
       if (!res.ok || body["ok"] !== true) {
@@ -1141,7 +1143,10 @@ export default function LivingCostPlan({ data, sessionId }: Props) {
             </p>
             <button
               type="button"
-              onClick={doRevert}
+              onClick={() => {
+                if (!window.confirm("Approve removing only the planned obligations added by this destination budget? Paid or committed items will stay.")) return;
+                void doRevert(BUDGET_ACTION_ACKS.revert);
+              }}
               className="mt-3 rounded-xl border border-[var(--sr-clay)]/40 px-4 py-2 text-xs font-semibold text-[var(--sr-clay)] transition hover:bg-[var(--sr-clay)]/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-clay)]"
             >
               Revert applied budget

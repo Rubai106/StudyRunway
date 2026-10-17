@@ -41,6 +41,12 @@ export interface ToolDefinition {
   parameters: z.ZodTypeAny;
   /** If true, the orchestrator pauses and asks the user to Approve/Deny first. */
   requiresApproval: boolean;
+  /**
+   * Set only for deterministic, side-effect-free tools that may safely run a
+   * second time during result verification. Live lookups and stateful tools
+   * must leave this unset.
+   */
+  safeToReplayForVerification?: boolean;
   /** The implementation. Must never move money, submit payments, or contact anyone. */
   handler: (
     args: Record<string, unknown>,

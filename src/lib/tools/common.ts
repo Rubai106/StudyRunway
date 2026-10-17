@@ -8,7 +8,7 @@
  *   without inventing anything.
  * - assemblePlanState: builds a full PlanState for the engine from the
  *   tool input. `.passthrough()` lets callers hand over a whole PlanState.
- * - withToolTimeout: 15s internal timeout discipline for every handler.
+ * - withToolTimeout: bounded timeout discipline for tool handlers.
  */
 
 import { z } from "zod";
@@ -76,15 +76,19 @@ export function assemblePlanState(input: ToolPlanInput): PlanState {
 export const TOOL_TIMEOUT_MS = 15_000;
 
 /** Wrap a handler body so it rejects if it exceeds the tool timeout. */
-export async function withToolTimeout<T>(label: string, fn: () => T | Promise<T>): Promise<T> {
+export async function withToolTimeout<T>(
+  label: string,
+  fn: () => T | Promise<T>,
+  timeoutMs: number = TOOL_TIMEOUT_MS,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       Promise.resolve().then(fn),
       new Promise<T>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`${label}: exceeded the ${TOOL_TIMEOUT_MS / 1000}s tool timeout`)),
-          TOOL_TIMEOUT_MS,
+          () => reject(new Error(`${label}: exceeded the ${timeoutMs / 1000}s tool timeout`)),
+          timeoutMs,
         );
       }),
     ]);

@@ -7,6 +7,7 @@
  */
 import { revertBudgetFromTask } from "@/lib/budgetApply";
 import { requestOriginError, sessionIdError } from "@/lib/agent/session";
+import { BUDGET_ACTION_ACKS } from "@/lib/budgetApproval";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -22,7 +23,7 @@ export async function POST(req: Request): Promise<Response> {
   if (len && Number(len) > MAX_BODY_BYTES) {
     return Response.json({ ok: false, error: "request body too large" }, { status: 413 });
   }
-  let body: { sessionId?: unknown };
+  let body: { sessionId?: unknown; approvalAck?: unknown };
   try {
     body = (await req.json()) as { sessionId?: unknown };
   } catch {
@@ -31,6 +32,9 @@ export async function POST(req: Request): Promise<Response> {
   const sidErr = sessionIdError(body.sessionId);
   if (sidErr) {
     return Response.json({ ok: false, error: sidErr }, { status: 400 });
+  }
+  if (body.approvalAck !== BUDGET_ACTION_ACKS.revert) {
+    return Response.json({ ok: false, error: "Explicit approval is required before reverting this budget." }, { status: 400 });
   }
   try {
     const result = revertBudgetFromTask(body.sessionId as string);

@@ -25,10 +25,11 @@ is an async generator yielding typed `AgentEvent`s (see §5). Phases, in order:
    request tool calls. Every requested name is checked against the allow-list
    first: anything off the list is **never executed** — the model gets a refusal
    string in its conversation context instead.
-5. **Verification** — the orchestrator independently re-executes the last
-   successful data-producing tool call with the exact validated args captured
-   server-side at execution time, and compares summaries. Match → `verified:
-   true`; mismatch → figures are flagged provisional.
+5. **Verification** — only tools explicitly marked deterministic and
+   side-effect-free are re-executed with their validated args. Matching
+   summaries set `verified: true`; mismatches are provisional. Live research,
+   approval-gated actions, and stateful tools are not replayed and are labeled
+   as not independently re-checked.
 6. **Outcome** — the model composes a verdict-first summary (every figure must
    come from tool results), then a `result` event carries the selected tool's
    transient structured data together with evidence, assumptions, and the
@@ -39,9 +40,14 @@ Failure handling: arg validation errors, timeouts, and tool errors become
 retry is allowed on transient failures (HTTP 429/5xx, timeouts, network
 resets). Model-level failures (unparseable JSON after a correction retry,
 provider errors) emit a recoverable `error` event and mark the task `failed`.
-Approval gates (`requiresApproval: true`, currently only `draft_email`) pause
-the loop with a `clarify` event carrying an Approve/Deny form; the call runs
-only after an explicit "approve" via `/api/agent/answer`. Client abort (Stop
+Local financial tools keep the 15-second default timeout. `research_policy`
+gets up to 55 seconds for the Vertex Google Search request, 60 seconds for its
+handler, and 65 seconds at the orchestrator boundary so citation metadata has
+time to return without letting the operation hang indefinitely.
+Approval gates (`requiresApproval: true`, including draft preparation and
+Safe-to-Send actions) pause the loop with a `clarify` event carrying an
+Approve/Deny form; the call runs only after an explicit "approve" via
+`/api/agent/answer`. Client abort (Stop
 button → `AbortSignal`) ends the stream quietly mid-phase.
 
 ## 2. Task state model (`src/lib/agent/state.ts`)
@@ -49,7 +55,9 @@ button → `AbortSignal`) ends the stream quietly mid-phase.
 Per-session `TaskState`, kept **in memory on the server** (a `Map`; no DB):
 
 - `userGoal`, `status` (`planning | clarifying | executing | verifying | done | failed`)
-- `confirmedFacts[]` (source-tagged; only from user answers, never invented)
+- `confirmedFacts[]` (source-tagged; only from user answers, never invented;
+  clarification prompts are retained so research can safely use the user's
+  confirmed country, institution, or official domain)
 - `assumptions[]` (explicitly unconfirmed — the model is told not to present
   them as facts)
 - `planSteps[]` with `pending | active | done | skipped`
@@ -173,6 +181,28 @@ re-runs the analysis with the correction. Provider state is shown honestly in
 the header badge (`Demo mode` vs the configured provider label) via
 `/api/agent/status`.
 
+The Overview dashboard derives fee/deadline alerts from the latest funding
+forecast, non-demo Safe-to-Send decision, and dated action plan. Tuition/fee
+items within 60 days and projected shortfalls are ranked by urgency and link
+back to their source result. The user can open the existing reminder form from
+an alert; reminders stay in this browser and are not sent across devices.
+The latest funding result also carries a minimal cash-flow view of original-
+currency funding sources and unpaid obligations, plus the FX assumptions table.
+The dashboard groups amounts by currency and labels each relevant rate with its
+pair, as-of date, and source; it does not combine unlike currencies or claim a
+live rate.
+The dashboard also starts `research_policy` with `topic=credit_building`. That
+topic requires a confirmed destination country, asks Google Search grounding
+for government/regulator/official-registry sources, and uses the same
+claim-to-source citation gate as other policy research. Known public financial
+authority hosts are explicitly allow-listed; student eligibility remains a
+caveated informational guide, never a provider approval decision.
+`DailyBudgetPlanner` keeps a separate validated expense ledger in browser
+localStorage. It computes per-day totals, category breakdowns, a daily-limit
+progress value, and a seven-day trend in integer minor units. Entries keep
+their own currency, and only amounts matching the selected budget currency
+count toward its limit; no exchange rate or server sync is assumed.
+
 ## 7. 3D tool visualizer — the honesty rule
 
 `src/components/visualizer/` renders the agent's tool-call graph. **The
@@ -261,8 +291,9 @@ src/lib/livingCosts/ — the deterministic engine
             removes exactly the describePlanRevert ids that are still
             "planned" (committed/paid records are never touched) and
             recalculates. Served by POST /api/agent/budget-apply and
-            POST /api/agent/budget-revert; the component requires explicit
-            user confirmation (approval-gate UX pattern) before calling apply.
+            POST /api/agent/budget-revert; both routes require an explicit
+            action acknowledgment, and the component asks for confirmation
+            before applying or reverting.
 
 Demo wiring: runDemoFlow() (no provider credentials) calls
 executeToolCall("build_living_cost_plan", DEMO_SAMPLE_ARGS) through the real

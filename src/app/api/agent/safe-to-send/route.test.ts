@@ -66,6 +66,16 @@ describe("/api/agent/safe-to-send route", () => {
     expect(body.error).toContain("Explicit approval is required");
   });
 
+  it.each(["confirm_funding_receipt", "revert_simulation"])(
+    "requires an explicit acknowledgment for %s",
+    async (action) => {
+      const res = await POST(post({ sessionId: "sts_action_ack", action, payload: {} }));
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toContain("Explicit approval is required");
+    },
+  );
+
   it("blocks cross-origin requests", async () => {
     const r1 = await POST(
       post(

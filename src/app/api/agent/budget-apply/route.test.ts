@@ -7,6 +7,7 @@ import { POST as applyPOST } from "@/app/api/agent/budget-apply/route";
 import { POST as revertPOST } from "@/app/api/agent/budget-revert/route";
 import { createTask, clearStore, getTask } from "@/lib/agent/state";
 import { buildLivingCostPlan } from "@/lib/livingCosts";
+import { BUDGET_ACTION_ACKS } from "@/lib/budgetApproval";
 
 function post(route: (req: Request) => Promise<Response>, body: unknown, extraHeaders: Record<string, string> = {}): Promise<Response> {
   return route(
@@ -54,6 +55,7 @@ function canadaInputs() {
 function applyBody(extra: Record<string, unknown> = {}) {
   return {
     sessionId: "route-session",
+    approvalAck: BUDGET_ACTION_ACKS.apply,
     plan: limerickPlan(),
     planInputs: limerickInputs(),
     startDate: "2027-09-01",
@@ -78,6 +80,13 @@ describe("POST /api/agent/budget-apply", () => {
   it("rejects invalid sessionIds with 400", async () => {
     const res = await post(applyPOST, { sessionId: "bad id", plan: {} });
     expect(res.status).toBe(400);
+  });
+
+  it("requires explicit approval before mutating the budget plan", async () => {
+    const res = await post(applyPOST, applyBody({ approvalAck: undefined }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/explicit approval is required/i);
+    expect(getTask("route-session")!.workingPlan).toBeNull();
   });
 
   it("rejects unknown sessions with a clear error", async () => {
@@ -142,6 +151,7 @@ describe("POST /api/agent/budget-apply", () => {
   it("rejects a request with no planInputs", async () => {
     const res = await post(applyPOST, {
       sessionId: "route-session",
+      approvalAck: BUDGET_ACTION_ACKS.apply,
       plan: limerickPlan(),
       startDate: "2027-09-01",
       studyMonths: 12,
@@ -183,7 +193,10 @@ describe("POST /api/agent/budget-revert", () => {
     expect((await post(revertPOST, { sessionId: "bad id" })).status).toBe(400);
     const res = await post(revertPOST, { sessionId: "route-session" });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(/nothing to revert/);
+    expect(((await res.json()) as { error: string }).error).toMatch(/explicit approval is required/i);
+    const acknowledged = await post(revertPOST, { sessionId: "route-session", approvalAck: BUDGET_ACTION_ACKS.revert });
+    expect(acknowledged.status).toBe(400);
+    expect(((await acknowledged.json()) as { error: string }).error).toMatch(/nothing to revert/);
   });
 
   it("reverts an applied budget and clears the task record", async () => {
@@ -193,7 +206,7 @@ describe("POST /api/agent/budget-revert", () => {
       fxRateSource: "test quote",
       oneTimeDueDates: { "0": "2027-08-01" },
     }));
-    const res = await post(revertPOST, { sessionId: "route-session" });
+    const res = await post(revertPOST, { sessionId: "route-session", approvalAck: BUDGET_ACTION_ACKS.revert });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body["ok"]).toBe(true);

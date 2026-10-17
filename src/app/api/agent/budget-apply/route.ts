@@ -17,6 +17,7 @@
  */
 import { applyBudgetToTask } from "@/lib/budgetApply";
 import { requestOriginError, sessionIdError } from "@/lib/agent/session";
+import { BUDGET_ACTION_ACKS } from "@/lib/budgetApproval";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,6 +35,7 @@ export async function POST(req: Request): Promise<Response> {
   }
   let body: {
     sessionId?: unknown;
+    approvalAck?: unknown;
     plan?: unknown;
     planInputs?: unknown;
     startDate?: unknown;
@@ -52,6 +54,9 @@ export async function POST(req: Request): Promise<Response> {
   const sidErr = sessionIdError(body.sessionId);
   if (sidErr) {
     return Response.json({ ok: false, error: sidErr }, { status: 400 });
+  }
+  if (body.approvalAck !== BUDGET_ACTION_ACKS.apply) {
+    return Response.json({ ok: false, error: "Explicit approval is required before applying this budget." }, { status: 400 });
   }
   if (body.plan == null) {
     return Response.json({ ok: false, error: "plan is required" }, { status: 400 });
