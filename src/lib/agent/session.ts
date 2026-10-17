@@ -42,7 +42,26 @@ export function requestOriginError(req: Request): string | null {
   try {
     const originUrl = new URL(origin);
     const requestUrl = new URL(req.url);
-    return originUrl.origin === requestUrl.origin
+
+    // Reverse proxies such as Cloud Run terminate HTTPS before the request
+    // reaches Next.js. In that case req.url can reflect the internal HTTP
+    // address while the browser Origin contains the public HTTPS origin.
+    // Compare against the externally visible Host and forwarded protocol when
+    // available, then fall back to the request URL for local/test runtimes.
+    const host = req.headers.get("host")?.split(",")[0].trim();
+    const forwardedProtocol = req.headers
+      .get("x-forwarded-proto")
+      ?.split(",")[0]
+      .trim()
+      .replace(/:$/, "");
+    const protocol = forwardedProtocol
+      ? `${forwardedProtocol}:`
+      : requestUrl.protocol;
+    const requestOrigin = host && (protocol === "http:" || protocol === "https:")
+      ? new URL(`${protocol}//${host}`).origin
+      : requestUrl.origin;
+
+    return originUrl.origin === requestOrigin
       ? null
       : "origin not allowed for this request";
   } catch {
