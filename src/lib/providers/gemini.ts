@@ -27,6 +27,7 @@ interface GeminiToolCallWire {
   id?: string;
   type?: string;
   function?: { name?: string; arguments?: string };
+  extra_content?: Record<string, unknown>;
 }
 
 function isPlaceholder(value: string): boolean {
@@ -67,6 +68,9 @@ function toWireMessages(messages: ChatMessage[]): unknown[] {
           id: tc.id,
           type: "function",
           function: { name: tc.name, arguments: tc.arguments },
+          ...(tc.providerMetadata !== undefined
+            ? { extra_content: tc.providerMetadata }
+            : {}),
         })),
       };
     }
@@ -158,6 +162,9 @@ export function createGeminiProvider(
           id: call.id || `gemini_call_${Date.now()}_${index}`,
           name: call.function!.name as string,
           arguments: call.function!.arguments ?? "{}",
+          ...(call.extra_content !== undefined
+            ? { providerMetadata: call.extra_content }
+            : {}),
         }));
 
       return {

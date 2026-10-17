@@ -122,6 +122,89 @@ describe("Gemini adapter", () => {
     expect(result.stopReason).toBe("tool_calls");
   });
 
+  it("round-trips exact extra_content for sequential and parallel tool calls", async () => {
+    const firstMetadata = {
+      google: { thought_signature: "signature-from-google" },
+      untouched: { nested: ["value", 2] },
+    };
+    const secondMetadata = { google: { other: "metadata-without-signature" } };
+    const bodies: Record<string, unknown>[] = [];
+    const fakePost = vi.fn(async (_url: string, opts: { body: unknown }) => {
+      bodies.push(opts.body as Record<string, unknown>);
+      if (bodies.length === 1) {
+        return {
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [
+                {
+                  id: "parallel-1",
+                  type: "function",
+                  function: { name: "calc", arguments: '{"x":2}' },
+                  extra_content: firstMetadata,
+                },
+                {
+                  id: "parallel-2",
+                  type: "function",
+                  function: { name: "calc", arguments: '{"x":3}' },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          }],
+        };
+      }
+      return {
+        choices: [{
+          message: {
+            content: "done",
+            tool_calls: [{
+              id: "sequential-1",
+              type: "function",
+              function: { name: "calc", arguments: '{"x":4}' },
+              extra_content: secondMetadata,
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+      };
+    });
+    const provider = createGeminiProvider({
+      apiKey: "google-ai-studio-test-key",
+      baseUrl: DEFAULT_GEMINI_BASE_URL,
+      model: DEFAULT_GEMINI_MODEL,
+    }, fakePost as unknown as typeof postJson);
+
+    const first = await provider.chat(MESSAGES, TOOLS);
+    expect(first.toolCalls).toEqual([
+      {
+        id: "parallel-1",
+        name: "calc",
+        arguments: '{"x":2}',
+        providerMetadata: firstMetadata,
+      },
+      { id: "parallel-2", name: "calc", arguments: '{"x":3}' },
+    ]);
+
+    const second = await provider.chat([
+      ...MESSAGES,
+      { role: "assistant", content: "", toolCalls: first.toolCalls },
+      { role: "tool", toolCallId: "parallel-1", content: "2" },
+      { role: "tool", toolCallId: "parallel-2", content: "3" },
+    ], TOOLS);
+
+    const wireMessages = bodies[1].messages as {
+      role: string;
+      tool_calls?: { extra_content?: Record<string, unknown> }[];
+    }[];
+    expect(wireMessages[2].tool_calls?.map((call) => call.extra_content)).toEqual([
+      firstMetadata,
+      undefined,
+    ]);
+
+    expect(second.toolCalls[0].providerMetadata).toEqual(secondMetadata);
+  });
+
   it("reads Gemini key and model from env, and ignores placeholders", () => {
     process.env.GEMINI_API_KEY = "PLACEHOLDER";
     expect(readGeminiConfig()).toBeNull();

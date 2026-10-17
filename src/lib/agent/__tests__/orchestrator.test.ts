@@ -35,9 +35,17 @@ beforeEach(() => {
 class ScriptedProvider implements Provider {
   name = "xai" as const;
   calls: { messages: ChatMessage[]; tools: ToolSchema[] }[] = [];
+  snapshots: { messages: ChatMessage[]; tools: ToolSchema[] }[] = [];
   constructor(private queue: ChatResult[]) {}
   async chat(messages: ChatMessage[], tools: ToolSchema[]): Promise<ChatResult> {
     this.calls.push({ messages, tools });
+    this.snapshots.push({
+      messages: messages.map((message) => ({
+        ...message,
+        ...(message.toolCalls ? { toolCalls: [...message.toolCalls] } : {}),
+      })),
+      tools,
+    });
     const next = this.queue.shift();
     if (!next) throw new Error("scripted provider: response queue exhausted");
     return next;
@@ -50,12 +58,18 @@ const json = (v: unknown): ChatResult => ({
   stopReason: "stop",
 });
 const textOnly = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: "stop" });
-const toolTurn = (calls: { id: string; name: string; args: unknown }[]): ChatResult => ({
+const toolTurn = (calls: {
+  id: string;
+  name: string;
+  args: unknown;
+  providerMetadata?: Record<string, unknown>;
+}[]): ChatResult => ({
   text: "",
   toolCalls: calls.map((c) => ({
     id: c.id,
     name: c.name,
     arguments: JSON.stringify(c.args),
+    ...(c.providerMetadata ? { providerMetadata: c.providerMetadata } : {}),
   })),
   stopReason: "tool_calls",
 });
@@ -251,6 +265,44 @@ describe("model-driven loop", () => {
     for (const call of provider.calls) {
       expect(call.tools.map((t) => t.name)).not.toContain("__ping");
     }
+  });
+
+  it("retains provider metadata on assistant tool calls across model rounds", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{
+        id: "gemini-call-1",
+        name: "forecast_calc",
+        args: { x: 21 },
+        providerMetadata: { google: { thought_signature: "from-google" } },
+      }]),
+      toolTurn([{ id: "gemini-call-2", name: "forecast_calc", args: { x: 22 } }]),
+      textOnly("The calculation is complete."),
+      textOnly("Your runway is fine: 42."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-provider-metadata-history",
+      message: "forecast my runway",
+      tools: [PING_TOOL, calcTool()],
+      provider,
+      maxToolCalls: 2,
+    }));
+
+    expectValidEvents(events);
+    const assistantWithToolCall = provider.snapshots
+      .slice(1)
+      .flatMap((call) => call.messages)
+      .find((message) => message.role === "assistant" && message.toolCalls?.length);
+    expect(assistantWithToolCall?.toolCalls).toEqual([
+      {
+        id: "gemini-call-1",
+        name: "forecast_calc",
+        arguments: '{"x":21}',
+        providerMetadata: { google: { thought_signature: "from-google" } },
+      },
+    ]);
+    expect(provider.calls.length).toBeGreaterThan(1);
   });
 
   it("pauses on approval gates and never executes before approval", async () => {
