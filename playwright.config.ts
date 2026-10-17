@@ -11,6 +11,7 @@ export default defineConfig({
     // Browser tests must be deterministic and must never call a real provider,
     // even when the developer has a real key in .env.local.
     env: {
+      AI_BACKEND: "demo",
       AI_PROVIDER: "demo",
       XAI_API_KEY: "PLACEHOLDER",
       GEMINI_API_KEY: "PLACEHOLDER",

@@ -46,8 +46,12 @@ import { toJsonSchema } from "../providers/zodjson";
 import { HttpError } from "../providers/http";
 import type { Provider, ChatMessage, ToolSchema } from "../providers/types";
 import { CURRENCIES, isSupportedCurrency } from "../currency";
+import { toMinor } from "../money";
+import { listDestinations } from "../livingCosts";
 import {
   extractFundingGapInputFromText,
+  extractScenarioFundingGapInputFromText,
+  fundingGapInputToToolPlan,
   fundingGapInputFromPlan,
 } from "../tools/analyzeFundingGap";
 import { RESEARCH_POLICY_TOOL_TIMEOUT_MS } from "../tools/researchPolicy";
@@ -236,14 +240,346 @@ const MAX_MODEL_ROUNDS = 3;
 
 /** Avoid invoking an expensive model or asking financial questions for a greeting alone. */
 function isSimpleGreeting(message: string): boolean {
-  return /^(?:(?:hi|hello|hey|howdy)(?:\s+there)?|good\s+(?:morning|afternoon|evening)|what(?:'|’)s\s+up)[!.,?\s]*$/i.test(message.trim());
+  const clean = message.trim();
+  return (
+    /^(?:(?:hi|hello|hey|howdy)(?:\s+there)?|good\s+(?:morning|afternoon|evening)|what(?:'|’)s\s+up)[!.,?\s]*$/i.test(clean) ||
+    /^(?:(?:hi|hello|hey)[!.,?\s]+)?(?:what can you help me with|what do you do|can you help me)[!.,?\s]*$/i.test(clean)
+  );
 }
 
 function isTuitionTimingRequest(message: string): boolean {
-  return (
-    /\b(?:tuition|tuition fee|education fee|invoice|payment deadline)\b/i.test(message) &&
-    /\b(?:scholarship|grant|funding|funds|money|late|delay|arriv\w*|on time|pay|deadline)\b/i.test(message)
+  const concernsTuition = /\b(?:tuition|tuition fee|education fee|invoice|payment deadline)\b/i.test(message);
+  const asksWhetherPaymentCanBeMade = /\b(?:can|could|will|would|am i able to|do i have enough(?: money)? to|is there enough)\b[\s\S]{0,100}\b(?:pay|paid|cover|afford|meet|settle)\b/i.test(message);
+  const asksAboutTiming = /\b(?:on time|before (?:the )?(?:deadline|due date)|by (?:the )?(?:deadline|due date)|by \d{4}-\d{2}-\d{2}|before \d{4}-\d{2}-\d{2})\b/i.test(message);
+  return concernsTuition && asksWhetherPaymentCanBeMade && asksAboutTiming;
+}
+
+function attachedDocumentToolInput(message: string): { text: string; documentKind: "invoice" | "scholarship_letter" | "fee_schedule" | "other" } | null {
+  const markerIndex = message.indexOf(ATTACHED_DOCUMENT_EVIDENCE_MARKER);
+  if (markerIndex < 0) return null;
+  const attachedText = message.slice(markerIndex + ATTACHED_DOCUMENT_EVIDENCE_MARKER.length);
+  const kindMatch = /Document kind:\s*(invoice|scholarship letter|fee schedule|other)\s*\./i.exec(attachedText);
+  if (!kindMatch) return null;
+  const documentKind = kindMatch[1].toLowerCase().replaceAll(" ", "_") as
+    "invoice" | "scholarship_letter" | "fee_schedule" | "other";
+  const text = attachedText.slice(kindMatch.index + kindMatch[0].length).trim();
+  return {
+    text: text || "No amount or date candidates were found in the attached document.",
+    documentKind,
+  };
+}
+
+function explicitFinancialRequestText(state: TaskState, message: string): string {
+  return [
+    state.originalRequest,
+    ...confirmedAnswersAsFinancialText(state.confirmedFacts),
+    ...state.confirmedFacts.filter((fact) => fact.source === "user").map((fact) => fact.value),
+    message !== state.originalRequest ? message : "",
+  ].filter(Boolean).join("\n");
+}
+
+function explicitTransferComparisonArgs(text: string): Record<string, unknown> | null {
+  const codes = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
+  const moneyPattern = new RegExp(`(?<![A-Z0-9])(${codes})\\s*([0-9][0-9,]*(?:\\.\\d{1,3})?)(?![A-Z0-9])`, "gi");
+  const mentions = [...text.matchAll(moneyPattern)];
+  const sendAmount = mentions.find((match) => {
+    const start = match.index ?? 0;
+    const context = text.slice(Math.max(0, start - 60), Math.min(text.length, start + match[0].length + 50));
+    return /\b(?:send|sending|transfer|transferring|remit|remittance|amount)\b/i.test(context);
+  }) ?? (mentions.length === 1 ? mentions[0] : undefined);
+  if (!sendAmount) return null;
+
+  const start = sendAmount.index ?? 0;
+  const fromCurrency = sendAmount[1].toUpperCase();
+  const after = text.slice(start + sendAmount[0].length);
+  const receiveMatch = after.match(/\b(?:to|into|receive(?:d)?)\s*([A-Z]{3})\b/i) ??
+    text.match(/\b(?:to|into)\s*([A-Z]{3})\b/i);
+  const toCurrency = receiveMatch?.[1]?.toUpperCase();
+  if (!toCurrency || !isSupportedCurrency(toCurrency)) return null;
+
+  const deadlineMatch = text.match(/\b(?:by|before|deadline(?: is)?|due(?: on)?)\s*(\d{4}-\d{2}-\d{2})\b/i);
+  if (deadlineMatch && !ISO_DATE.safeParse(deadlineMatch[1]).success) return null;
+  const lower = text.toLowerCase();
+  const objective = /\b(?:fastest|quickest|as soon as possible)\b/.test(lower)
+    ? "fastest"
+    : /\b(?:cheapest|lowest (?:total )?cost|minimi[sz]e (?:the )?(?:fee|cost)s?)\b/.test(lower)
+      ? "min_total_cost"
+      : "balanced";
+  const amount = Number(sendAmount[2].replaceAll(",", ""));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return {
+    amountMinor: toMinor(amount, fromCurrency),
+    fromCurrency,
+    toCurrency,
+    deadlineIso: deadlineMatch?.[1] ?? null,
+    objective,
+  };
+}
+
+function explicitLivingCostInputs(text: string): Record<string, unknown> | null {
+  const destinations = listDestinations();
+  const containsPlace = (place: string | undefined) => {
+    if (!place) return false;
+    const escaped = place.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${escaped}\\b`, "i").test(text);
+  };
+  const mentions = destinations.map((destination) => {
+    const [city, country] = destination.label.split(",").map((part) => part.trim());
+    const cityMentioned = containsPlace(city);
+    const countryMentioned = containsPlace(country);
+    return { destination, score: cityMentioned ? 2 : countryMentioned ? 1 : 0 };
+  }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score);
+  if (!mentions.length || (mentions.length > 1 && mentions[0].score === mentions[1].score)) return null;
+
+  const codes = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
+  const moneyPattern = new RegExp(`(?<![A-Z0-9])(${codes})\\s*([0-9][0-9,]*(?:\\.\\d{1,3})?)(?![A-Z0-9])`, "gi");
+  const moneyMentions = [...text.matchAll(moneyPattern)];
+  const budgetMention = moneyMentions.find((match) => {
+    const start = match.index ?? 0;
+    return /\b(?:monthly|month|budget|per month)\b/i.test(
+      text.slice(Math.max(0, start - 50), Math.min(text.length, start + match[0].length + 50)),
+    );
+  }) ?? (moneyMentions.length === 1 ? moneyMentions[0] : undefined);
+  if (!budgetMention) return null;
+
+  const budgetCurrency = budgetMention[1].toUpperCase();
+  const budgetAmount = Number(budgetMention[2].replaceAll(",", ""));
+  if (!Number.isFinite(budgetAmount) || budgetAmount < 0) return null;
+  const inputs: Record<string, unknown> = {
+    destinationId: mentions[0].destination.id,
+    monthlyBudgetMinor: toMinor(budgetAmount, budgetCurrency),
+    budgetCurrency,
+    // Unknown insurance coverage is conservatively treated as not covered;
+    // the output can then include the sourced cost and disclose this assumption.
+    insuranceCovered:
+      (/\b(?:insurance|health coverage)\b.{0,35}\b(?:covered|included)\b/i.test(text) &&
+        !/\b(?:insurance|health coverage)\b.{0,20}\bnot\s+(?:covered|included)\b/i.test(text)) ||
+      /\b(?:I have|already have)\b.{0,30}\b(?:insurance|health cover)\b/i.test(text),
+  };
+  const accommodation = text.match(/\b(shared|private room|student residence|student accommodation)\b/i)?.[1];
+  if (accommodation) inputs.accommodationType = accommodation;
+  if (/\b(?:I cook|cook at home|mostly cook)\b/i.test(text)) inputs.cookingHabit = "cook_at_home";
+  else if (/\b(?:eat out|mostly eat out)\b/i.test(text)) inputs.cookingHabit = "eat_out";
+  if (/\butilities (?:are )?included\b/i.test(text)) inputs.utilitiesIncluded = true;
+  else if (/\butilities (?:are )?not included\b/i.test(text)) inputs.utilitiesIncluded = false;
+  return inputs;
+}
+
+function explicitScenarioRecoveryOptions(text: string, plan: NonNullable<TaskState["workingPlan"]>): Record<string, unknown>[] | null {
+  const marker = /\b(?:compare|evaluate|rank|consider)\s+(?:only\s+)?(?:these\s+)?(?:hypothetical\s+)?(?:backup\s+|recovery\s+|alternative\s+)?options?\s*:/i.exec(text);
+  if (!marker || marker.index === undefined) return null;
+  const list = text.slice(marker.index + marker[0].length);
+  const segments = list.split(/[;\n]+/).map((part) => part.trim()).filter(Boolean);
+  const codes = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
+  const amountPattern = "([0-9][0-9,]*(?:\\.\\d{1,3})?)";
+  const options: Record<string, unknown>[] = [];
+  for (const segment of segments) {
+    const installment = segment.match(new RegExp(
+      `^(.{1,100}?tuition\\s+instal{1,2}ment.{0,30}?)\\s+(${codes})\\s+${amountPattern}\\s+(?:first\\s+)?(?:due|by)\\s+(\\d{4}-\\d{2}-\\d{2})[\\s\\S]{0,100}?\\b(?:remainder|remaining(?:\\s+balance)?)\\s+(?:due|by)\\s+(\\d{4}-\\d{2}-\\d{2})`,
+      "i",
+    ));
+    if (installment) {
+      const currency = installment[2].toUpperCase();
+      const firstDate = installment[4];
+      const remainderDate = installment[5];
+      const tuition = plan.obligations.filter((obligation) => obligation.kind === "tuition");
+      const amount = Number(installment[3].replaceAll(",", ""));
+      if (
+        tuition.length === 1 && tuition[0].dueDate === firstDate &&
+        ISO_DATE.safeParse(remainderDate).success && Number.isFinite(amount) && amount > 0
+      ) {
+        options.push({
+          type: "tuition_installment",
+          label: installment[1].trim().slice(0, 120),
+          obligationId: tuition[0].id,
+          firstInstallmentMinor: toMinor(amount, currency),
+          remainderDueDate: remainderDate,
+        });
+      }
+      continue;
+    }
+
+    const money = new RegExp(`\\b(${codes})\\s+${amountPattern}\\b`, "i").exec(segment);
+    const arrival = segment.match(/\b(?:available|arriv\w*|expected(?:\s+on)?|by|on)\s+(\d{4}-\d{2}-\d{2})\b/i);
+    if (!money || !arrival || !/\b(?:family|support|grant|loan|funding|backup|savings?)\b/i.test(segment)) continue;
+    const currency = money[1].toUpperCase();
+    const amount = Number(money[2].replaceAll(",", ""));
+    if (!Number.isFinite(amount) || amount <= 0 || !ISO_DATE.safeParse(arrival[1]).success) continue;
+    const label = segment.slice(0, money.index).replace(/^[\s,:-]+|[\s,:-]+$/g, "").slice(0, 120) || "Additional funding";
+    options.push({
+      type: "additional_funding",
+      label,
+      amountMinor: toMinor(amount, currency),
+      currency,
+      availableDate: arrival[1],
+    });
+  }
+  return options;
+}
+
+function explicitDelayScenario(text: string, plan: NonNullable<TaskState["workingPlan"]>): Record<string, unknown> | null {
+  const delay = text.match(/\b(?:scholarship|grant|funding)\b[\s\S]{0,100}?\b(\d{1,3})\s+days?\s+(?:late|delayed)\b/i) ??
+    text.match(/\b(?:delay|delayed)\s+(?:the\s+)?(?:scholarship|grant|funding)\s+(?:by\s+)?(\d{1,3})\s+days?\b/i);
+  if (!delay) return null;
+  const days = Number(delay[1]);
+  const scholarships = plan.fundingSources.filter((source) =>
+    source.kind === "scholarship" && source.expectedDate != null &&
+    ["confirmed_pending", "conditional", "estimated", "unverified"].includes(source.status),
   );
+  if (scholarships.length !== 1 || !Number.isInteger(days) || days < 1 || days > 365) return null;
+  return { type: "scholarship_delay", sourceId: scholarships[0].id, days };
+}
+
+function explicitSafeToSendPatch(text: string): Record<string, unknown> | null {
+  const codes = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
+  const number = "([0-9][0-9,]*(?:\\.\\d{1,3})?)";
+  const labelledMoney = (label: string) => {
+    const match = new RegExp(`\\b${label}\\b[^.;\\n]{0,70}?\\b(${codes})\\s*${number}\\b`, "i").exec(text);
+    if (!match) return null;
+    const major = Number(match[2].replaceAll(",", ""));
+    if (!Number.isFinite(major) || major < 0) return null;
+    return { currency: match[1].toUpperCase(), major, minor: toMinor(major, match[1]) };
+  };
+  const tuition = labelledMoney("tuition");
+  const available = labelledMoney("available\\s+funds");
+  const tuitionReserve = labelledMoney("tuition\\s+reserve");
+  const obligations = labelledMoney("other\\s+obligations");
+  const livingReserve = labelledMoney("living\\s+reserve");
+  const emergencyReserve = labelledMoney("emergency\\s+reserve");
+  const fields = [tuition, available, tuitionReserve, obligations, livingReserve, emergencyReserve];
+  if (!fields.some(Boolean) || !/\b(?:Safe.to.Send|transfer readiness|payment readiness)\b/i.test(text)) return null;
+
+  const patch: Record<string, unknown> = {};
+  if (tuition) {
+    patch.tuitionAmountMinor = tuition.minor;
+    patch.tuitionCurrency = tuition.currency;
+  }
+  if (available) {
+    patch.availableFundsMinor = available.minor;
+    patch.openingAvailableMinor = available.minor;
+    patch.fundingCurrency = available.currency;
+    patch.fundingRecords = [{
+      id: "user-stated-available-funds",
+      type: "savings_transfer",
+      label: "Student-stated available funds",
+      expectedAmountMinor: available.minor,
+      currency: available.currency,
+      expectedDate: todayISO(null),
+      receivedAmountMinor: available.minor,
+      receivedDate: todayISO(null),
+      status: "RECEIVED",
+      evidenceNote: "The user described this amount as available; the current date anchors the timeline record.",
+    }];
+  }
+  if (tuitionReserve) patch.fundsReservedForTuitionMinor = tuitionReserve.minor;
+  if (obligations) patch.knownObligationsMinor = obligations.minor;
+  if (livingReserve) patch.requiredLivingReserveMinor = livingReserve.minor;
+  if (emergencyReserve) patch.desiredEmergencyReserveMinor = emergencyReserve.minor;
+
+  const institution = text.match(/\bInstitution\s+(.+?)(?:,\s*([^,.]+))?(?:\.|$)/i);
+  if (institution?.[1]) patch.institutionName = institution[1].trim().slice(0, 200);
+  const destinationCountry = text.match(/\bdestination\s+country\s+([A-Za-z][A-Za-z -]{1,100}?)(?=[;,.]|$)/i)?.[1] ?? institution?.[2];
+  if (destinationCountry) patch.destinationCountry = destinationCountry.trim();
+  const fundingCountry = text.match(/\bfunding\s+country\s+([A-Za-z][A-Za-z -]{1,100}?)(?=[;,.]|$)/i)?.[1];
+  if (fundingCountry) patch.fundingSourceCountry = fundingCountry.trim();
+
+  const dueDate = text.match(/\btuition\b[^.;\n]{0,100}?\b(?:due|deadline)\s+(?:by\s+)?(\d{4}-\d{2}-\d{2})/i)?.[1];
+  if (dueDate && ISO_DATE.safeParse(dueDate).success) patch.tuitionDueDate = dueDate;
+  const rate = text.match(/\b1\s+([A-Z]{3})\s*=\s*([0-9]+(?:\.[0-9]+)?)\s+([A-Z]{3})\b/i);
+  if (rate && isSupportedCurrency(rate[1]) && isSupportedCurrency(rate[3])) {
+    const source = text.match(/\bsource\s+["“]([^"”\r\n]{1,200})["”]/i)?.[1];
+    const rateDate = text.match(/\bdated\s+(\d{4}-\d{2}-\d{2})\b/i)?.[1];
+    if (available?.currency === rate[1].toUpperCase() && tuition?.currency === rate[3].toUpperCase() && Number(rate[2]) > 0) {
+      patch.sendPerFundingRate = Number(rate[2]);
+      if (source) patch.sendPerFundingRateSource = source;
+      if (rateDate && ISO_DATE.safeParse(rateDate).success) patch.sendPerFundingRateTimestamp = `${rateDate}T00:00:00.000Z`;
+    }
+  }
+
+  const quotePart = text.match(/user.entered\s+unverified\s+transfer\s+quote\s*:\s*([^.;\n]+(?:\.[^\n]+)?)/i)?.[1] ?? "";
+  if (quotePart) {
+    const send = new RegExp(`\\bsend\\s+(${codes})\\s*${number}\\b`, "i").exec(quotePart);
+    const fee = new RegExp(`\\bfee\\s+(${codes})\\s*${number}\\b`, "i").exec(quotePart);
+    const receive = new RegExp(`\\breceive\\s+(${codes})\\s*${number}\\b`, "i").exec(quotePart);
+    const deliveryDate = quotePart.match(/\bby\s+(\d{4}-\d{2}-\d{2})\b/i)?.[1];
+    if (send && fee && receive) {
+      const sendCurrency = send[1].toUpperCase();
+      const feeCurrency = fee[1].toUpperCase();
+      const targetCurrency = receive[1].toUpperCase();
+      const sendAmount = Number(send[2].replaceAll(",", ""));
+      const feeAmount = Number(fee[2].replaceAll(",", ""));
+      const receiveAmount = Number(receive[2].replaceAll(",", ""));
+      if (
+        Number.isFinite(sendAmount) && Number.isFinite(feeAmount) && Number.isFinite(receiveAmount) &&
+        sendAmount > 0 && feeAmount >= 0 && receiveAmount >= 0
+      ) {
+        const quote: Record<string, unknown> = {
+          id: "user-provided-unverified-quote",
+          providerName: "User-provided (unverified)",
+          sendCurrency,
+          sendAmountMinor: toMinor(sendAmount, sendCurrency),
+          feeMinor: toMinor(feeAmount, feeCurrency),
+          feeCurrency,
+          targetCurrency,
+          expectedReceiveMinor: toMinor(receiveAmount, targetCurrency),
+          sourceLabel: "User-provided (unverified)",
+          verificationStatus: "user_provided_unverified",
+          verificationBasis: "Entered by the user; not independently verified.",
+        };
+        if (deliveryDate && ISO_DATE.safeParse(deliveryDate).success) quote.expectedDeliveryDate = deliveryDate;
+        patch.quotes = [quote];
+        patch.selectedQuoteId = quote.id;
+        patch.priority = "meet_deadline";
+      }
+    }
+  }
+
+  if (tuition && dueDate && ISO_DATE.safeParse(dueDate).success) {
+    patch.timelineObligations = [{
+      id: "user-stated-tuition-obligation",
+      label: "Tuition",
+      kind: "tuition",
+      amountMinor: tuition.minor,
+      currency: tuition.currency,
+      dueDate,
+      status: "committed",
+    }];
+  }
+  patch.notes = "Analysis-only readiness review requested; no payment was simulated or initiated.";
+  return patch;
+}
+
+function explicitPolicyResearchArgs(text: string): Record<string, unknown> | null {
+  const lower = text.toLowerCase();
+  const topic = /\b(?:credit history|build(?:ing)? credit|credit score)\b/.test(lower)
+    ? "credit_building"
+    : /\binstallments?|instalments?|payment plan\b/.test(lower)
+      ? "instalments"
+      : /\bscholarship\b/.test(lower)
+        ? "scholarship"
+        : /\bproof of funds?\b/.test(lower)
+          ? "proof_of_funds"
+          : /\bvisa\b/.test(lower)
+            ? "visa"
+            : /\btuition|fees?\b/.test(lower)
+              ? "tuition"
+              : null;
+  if (!topic) return null;
+
+  const countryNames = [
+    "United States", "United Kingdom", "United Arab Emirates", "New Zealand", "South Africa",
+    "Bangladesh", "Australia", "Canada", "Denmark", "Germany", "Ireland", "India", "Malaysia", "Singapore",
+    "UK", "US",
+  ];
+  const escapedCountries = countryNames.map((country) => country.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const country = text.match(new RegExp(`\\b(?:in|country(?: is)?|destination(?: country)?)\\s+(${escapedCountries})\\b`, "i"))?.[1];
+  if (topic === "credit_building" && !country) return null;
+  const request = text.slice(0, 350).replace(/\s+/g, " ").trim();
+  return {
+    query: `Official ${topic.replaceAll("_", " ")} guidance for international students${country ? ` in ${country}` : ""}: ${request}`.slice(0, 500),
+    topic,
+    country: country ?? "",
+  };
 }
 
 function tuitionTimingFallbackQuestion(): ClarifyQuestion {
@@ -266,6 +602,10 @@ function tuitionTimingFallbackQuestion(): ClarifyQuestion {
 function clarificationAlreadyAnswered(question: ClarifyQuestion, context: string): boolean {
   const descriptor = `${question.id} ${question.prompt}`.toLowerCase();
   const source = context.toLowerCase();
+  if (
+    /analysis[- ]only.{0,100}safe.to.send.{0,100}readiness/.test(source) &&
+    /\b(?:safe.to.send|payment|transfer|quote|provider|bank|official|institution|deadline|funds?|reserve)\b/.test(descriptor)
+  ) return true;
   if (question.kind === "date") {
     const mentionsToday = /\b(today|current date|as of today)\b/.test(source);
     const hasIsoDate = /\b\d{4}-\d{2}-\d{2}\b/.test(source);
@@ -278,6 +618,10 @@ function clarificationAlreadyAnswered(question: ClarifyQuestion, context: string
   if (
     (/(other|additional|more).{0,35}fund|fund.{0,35}(other|additional|more)/.test(descriptor)) &&
     /\b(?:no|none|zero)\s+(?:(?:other|additional|more)\s+)?(?:sources?\s+of\s+)?fund(?:ing|s)\b/.test(source)
+  ) return true;
+  if (
+    /\b(?:provider|bank|company|quote source)\b/.test(descriptor) &&
+    /\buser[- ](?:entered|provided)\s+unverified\s+(?:transfer\s+)?quote\b/i.test(source)
   ) return true;
   return false;
 }
@@ -468,6 +812,14 @@ const SYSTEM_PROMPT = `You are StudyRunway, an AI financial-readiness assistant 
 How you work:
 - Stay within international student-finance tasks: study costs and tuition, student budgets/runway, funding gaps, scholarships and loans, proof of funds, student-finance documents, tuition instalments, cross-border education payments/transfers, and destination-specific credit-history basics for students. Do not answer unrelated requests; briefly redirect to these topics.
 - For a credit-building guide, use research_policy with topic=credit_building and the confirmed destination country. Keep it educational: cite the official sources returned by the tool, state eligibility limits and uncertainty clearly, avoid recommending borrowing/products, and never imply the user will qualify or get approved. If no country is confirmed, ask first.
+- Route a complete dated funding plan to analyze_funding_gap. Route a what-if, delayed-scholarship, or funding-recovery request to simulate_scenario; the orchestrator supplies the user's structured or explicitly stated baseline plan. Do not substitute Safe-to-Send tools for a generic crisis simulation.
+- When the user gives a transfer amount, send currency, receive currency, and asks to compare options, call compare_transfers without asking which providers. This build has reference estimates only, not live quotes; state that clearly and never present them as live provider offers.
+- For a destination living-cost or monthly-budget request with a supported city/country and stated budget, call build_living_cost_plan. Do not ask for an institution unless the user requests institution-specific costs. Accommodation and lifestyle are optional assumptions: omit unspecified preferences and disclose the dataset's default choice.
+- For an attached student-finance document, call extract_document to show candidate values and source evidence. Never ask for confirmation before extraction; ask for it after the candidate review is shown. Do not calculate from candidate values until the user confirms them.
+- Use Safe-to-Send tools only for an explicit transfer-readiness review or Safe-to-Send workflow. Start with upsert_safe_to_send_draft when collecting a new readiness review, then recalculate/get the decision. A request for analysis only must not trigger payment simulation. Payment simulation/execution remains approval-gated.
+- For an explicit university email-draft request with enough details to compose, call draft_email once; do not ask a separate free-text approval question. The orchestrator will pause at its explicit approval gate before creating the draft. draft_email never sends a message.
+- For an explicit Safe-to-Send readiness request, preserve the user's stated fields in upsert_safe_to_send_draft, then fetch/recalculate the decision. If facts are missing, show the actual missing fields; never report readiness from assumptions.
+- If the user labels a transfer quote as user-provided or unverified, use that label and its stated figures for analysis; do not block on the provider name. Keep route acceptance and official payment instructions as unknown unless explicitly supplied.
 - You NEVER invent financial figures. Every number you report must come from a tool result.
 - You may only call the tools listed for you. Never invent a tool name.
 - For tuition-payment safety decisions, use the Safe-to-Send tools to collect structured inputs, recalculate deterministic status, and request simulation only after explicit approval.
@@ -550,7 +902,7 @@ async function askModelJson<T>(
   ];
   for (let attempt = 0; attempt < 2; attempt++) {
     checkAbort(signal);
-    const res = await provider.chat(base, []);
+    const res = await provider.chat(base, [], { responseFormat: "json_object" });
     const cleaned = res.text
       .trim()
       .replace(/^```(?:json)?\s*/i, "")
@@ -988,6 +1340,57 @@ async function* runModelFlow(
             "I couldn't safely map the request to dated funding and bill records. Please state each amount with its 3-letter currency, whether funding is available or expected, and each bill's due date in YYYY-MM-DD format. I will not fill in missing amounts, dates, or exchange rates.",
           );
         }
+      } else if (tool.name === "compare_transfers") {
+        const groundedArgs = explicitTransferComparisonArgs(explicitFinancialRequestText(state, message));
+        if (groundedArgs) effectiveArgs = groundedArgs;
+      } else if (tool.name === "build_living_cost_plan") {
+        const groundedArgs = explicitLivingCostInputs(explicitFinancialRequestText(state, message));
+        if (groundedArgs && rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+          effectiveArgs = { ...(rawArgs as Record<string, unknown>), ...groundedArgs };
+        } else if (groundedArgs) {
+          effectiveArgs = groundedArgs;
+        }
+      } else if (tool.name === "research_policy") {
+        const groundedArgs = explicitPolicyResearchArgs(explicitFinancialRequestText(state, message));
+        if (groundedArgs) effectiveArgs = groundedArgs;
+      } else if (tool.name === "upsert_safe_to_send_draft") {
+        const groundedPatch = explicitSafeToSendPatch(explicitFinancialRequestText(state, message));
+        if (groundedPatch) {
+          effectiveArgs = { patch: groundedPatch };
+        }
+      } else if (tool.name === "simulate_scenario") {
+        // The scenario tool accepts the engine's full plan shape. Keep that
+        // large internal object out of the Vertex function call and rebuild it
+        // from user-confirmed facts, never from model-invented amounts/dates.
+        const requestText = explicitFinancialRequestText(state, message);
+        const groundedInput = extractScenarioFundingGapInputFromText(requestText);
+        const explicitPlan = state.workingPlan ?? (groundedInput ? fundingGapInputToToolPlan(groundedInput) : null);
+        if (explicitPlan && rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+          const args: Record<string, unknown> = { ...(rawArgs as Record<string, unknown>), plan: explicitPlan };
+          const explicitlyStatedDelay = explicitDelayScenario(requestText, explicitPlan);
+          const scenario = explicitlyStatedDelay ?? args.scenario;
+          if (scenario && typeof scenario === "object" && !Array.isArray(scenario)) {
+            const normalizedScenario = { ...(scenario as Record<string, unknown>) };
+            if (normalizedScenario.type === "scholarship_delay") {
+              const sources = explicitPlan.fundingSources;
+              const requestedId = typeof normalizedScenario.sourceId === "string" ? normalizedScenario.sourceId : "";
+              const byIdOrLabel = sources.filter((source) =>
+                source.id === requestedId || source.label.toLowerCase() === requestedId.toLowerCase(),
+              );
+              const scholarships = sources.filter((source) =>
+                source.kind === "scholarship" && source.expectedDate != null &&
+                ["confirmed_pending", "conditional", "estimated", "unverified"].includes(source.status),
+              );
+              const source = byIdOrLabel.length === 1 ? byIdOrLabel[0] : scholarships.length === 1 ? scholarships[0] : undefined;
+              if (source) normalizedScenario.sourceId = source.id;
+            }
+            args.scenario = normalizedScenario;
+          }
+          // Recovery assumptions are accepted only when explicit user text is
+          // present in a labelled alternative-options section.
+          args.recoveryOptions = explicitScenarioRecoveryOptions(requestText, explicitPlan) ?? [];
+          effectiveArgs = args;
+        }
       }
       const exec = await executeToolCall(tool, effectiveArgs, ctx, opts.toolTimeoutMs);
       toolCallCount += 1;
@@ -1035,6 +1438,59 @@ async function* runModelFlow(
       return { ok: false, summary: msg.slice(0, 500) };
     }
   };
+
+  // Attached-document turns have one safe, deterministic action: extract
+  // unconfirmed candidates from the provided evidence. Do not let model
+  // clarification or planning block this required review step.
+  if (documentOnlyMode) {
+    yield { type: "status", phase: "understanding" };
+    const input = attachedDocumentToolInput(message);
+    const tool = findTool(availableModelTools, "extract_document");
+    if (!input || !tool) {
+      state = updateTask(sessionId, { status: "failed" });
+      yield {
+        type: "error",
+        message: "I couldn't read the attached document evidence safely. Please re-upload it or enter the amount and date manually.",
+        recoverable: true,
+      };
+      return;
+    }
+    yield { type: "status", phase: "planning" };
+    state = updateTask(sessionId, { status: "executing" });
+    yield { type: "status", phase: "calling_tools" };
+    const callEvents: AgentEvent[] = [];
+    const outcome = await runSingleTool(
+      tool,
+      input,
+      tool.description.slice(0, 90),
+      rid("tc"),
+      (event) => callEvents.push(event),
+    );
+    for (const event of callEvents) yield event;
+    if (!outcome.ok) {
+      state = updateTask(sessionId, { status: "failed" });
+      yield { type: "error", message: outcome.summary, recoverable: true };
+      return;
+    }
+    state = updateTask(sessionId, { status: "done" });
+    yield {
+      type: "assistant_text",
+      text: "I extracted candidate values with their source evidence. They are unconfirmed and will not be used in a financial calculation until you review and confirm them.",
+    };
+    yield { type: "status", phase: "done" };
+    yield {
+      type: "result",
+      component: "document_review",
+      data: {
+        ...(outcome.data ?? {}),
+        summary: outcome.summary,
+        verified: false,
+        evidence: state.evidence,
+        toolCalls: state.toolCalls.map((call) => ({ tool: call.tool, ok: call.ok, summary: call.summary })),
+      },
+    };
+    return;
+  }
 
   // ---- UNDERSTANDING -----------------------------------------------------
   if (!opts.skipUnderstanding) {

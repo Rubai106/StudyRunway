@@ -89,6 +89,7 @@ test.beforeEach(async ({ page }) => {
     consoleErrors;
   if (!LIVE) await installMocks(page);
   await page.goto("/");
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
 });
 
 test.afterEach(async ({ page }) => {

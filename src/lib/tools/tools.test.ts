@@ -18,7 +18,11 @@ import {
   SAMPLE_TIMESTAMP,
   compareTransfersTool,
 } from "./compareTransfers";
-import { analyzeFundingGapTool } from "./analyzeFundingGap";
+import {
+  analyzeFundingGapTool,
+  extractFundingGapInputFromText,
+  extractScenarioFundingGapInputFromText,
+} from "./analyzeFundingGap";
 import { extractDocumentTool } from "./extractDocument";
 import { simulateScenarioTool } from "./simulateScenario";
 import { researchPolicyTool } from "./researchPolicy";
@@ -102,6 +106,60 @@ describe("minor-unit rounding", () => {
 });
 
 describe("analyze_funding_gap", () => {
+  it("keeps funding and obligation facts isolated to the sentence that states each amount", () => {
+    const text =
+      "As of 2026-10-17. I have confirmed savings of GBP 1,000 available 2026-10-17. " +
+      "A conditional scholarship of GBP 3,000 is expected 2026-11-15. " +
+      "Tuition of GBP 3,500 is committed and due 2026-11-03. " +
+      "Rent of GBP 700 is committed and due 2026-11-05.";
+    const input = extractFundingGapInputFromText(text);
+
+    expect(input).not.toBeNull();
+    expect(input?.fundingSources).toEqual([
+      expect.objectContaining({ amount: 1000, currency: "GBP", status: "confirmed_available", availableDate: "2026-10-17", kind: "savings" }),
+      expect.objectContaining({ amount: 3000, currency: "GBP", status: "conditional", expectedDate: "2026-11-15", kind: "scholarship" }),
+    ]);
+    expect(input?.obligations).toEqual([
+      expect.objectContaining({ amount: 3500, currency: "GBP", dueDate: "2026-11-03", status: "committed", kind: "tuition" }),
+      expect.objectContaining({ amount: 700, currency: "GBP", dueDate: "2026-11-05", status: "committed", kind: "rent" }),
+    ]);
+  });
+
+  it("builds a scenario baseline from dated facts while excluding explicitly listed recovery options", () => {
+    const text =
+      "As of 2026-10-17. I have confirmed savings of GBP 1,000 available 2026-10-17. " +
+      "A conditional scholarship of GBP 3,000 is expected 2026-11-10. " +
+      "Tuition of GBP 3,500 is committed and due 2026-11-03. Rent of GBP 700 is committed and due 2026-11-05. " +
+      "Compare only these hypothetical options: family support GBP 1,000 available 2026-10-25; " +
+      "proposed tuition instalment GBP 1,000 first due 2026-11-03 with remainder due 2026-11-25.";
+    const input = extractScenarioFundingGapInputFromText(text);
+
+    expect(input?.fundingSources.map((source) => source.amount)).toEqual([1000, 3000]);
+    expect(input?.obligations.map((obligation) => obligation.amount)).toEqual([3500, 700]);
+    expect(extractFundingGapInputFromText(text)).toBeNull();
+  });
+
+  it("accepts a multi-currency forecast only when the user supplies the conversion assumption", () => {
+    const input = extractFundingGapInputFromText(
+      "As of 2026-10-17. I have confirmed savings of BDT 500,000 available 2026-10-17. " +
+      "Tuition of GBP 2,500 is committed and due 2026-11-03. " +
+      "Rent of GBP 700 is committed and due 2026-11-05. " +
+      "The exchange rate is 1 BDT = 0.0064 GBP, provided by me, dated 2026-10-17.",
+    );
+
+    expect(input).not.toBeNull();
+    expect(input).toMatchObject({
+      planningCurrency: "GBP",
+      fxRates: { "BDT>GBP": 0.0064 },
+      fxAsOf: "2026-10-17",
+      fxSource: "User-provided exchange-rate assumption",
+    });
+    expect(extractFundingGapInputFromText(
+      "As of 2026-10-17. I have confirmed savings of BDT 500,000 available 2026-10-17. " +
+      "Tuition of GBP 2,500 is committed and due 2026-11-03.",
+    )).toBeNull();
+  });
+
   it("finds the known £278.00 gap on the sample plan", async () => {
     const result = await analyzeFundingGapTool.handler({ plan: samplePlanInput() }, CTX);
     expect(result.ok).toBe(true);

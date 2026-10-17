@@ -24,6 +24,7 @@ import {
   getSafeToSendScenario,
   type SafeToSendDecision,
   type SafeToSendDraft,
+  type PaymentQuote,
   type SimulationRecord,
 } from "@/lib/safeToSend/engine";
 
@@ -305,7 +306,19 @@ function mergeDraft(
   delete nextRaw["selectedRecoveryAssumption"];
   const maybeQuotes = nextRaw["quotes"];
   if (Array.isArray(maybeQuotes)) {
-    nextRaw["quotes"] = replaceQuotes ? maybeQuotes : [...base.quotes, ...maybeQuotes];
+    if (replaceQuotes) {
+      nextRaw["quotes"] = maybeQuotes;
+    } else {
+      // Treat quote ids as stable record keys: an update replaces that quote
+      // while preserving the user's other options and avoiding duplicate cards.
+      const byId = new Map(base.quotes.map((quote) => [quote.id, quote]));
+      for (const quote of maybeQuotes) {
+        if (quote && typeof quote === "object" && typeof quote.id === "string") {
+          byId.set(quote.id, quote as PaymentQuote);
+        }
+      }
+      nextRaw["quotes"] = [...byId.values()];
+    }
   }
   return SafeToSendDraftSchema.parse(nextRaw);
 }

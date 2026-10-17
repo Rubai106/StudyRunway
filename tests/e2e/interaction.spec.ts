@@ -120,6 +120,11 @@ async function sendMessage(page: Page, text: string) {
   await page.getByTestId("send-button").click();
 }
 
+async function openChat(page: Page) {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+}
+
 test.describe("interaction states", () => {
   test.beforeEach(async ({ page }) => {
     const consoleErrors: string[] = [];
@@ -139,7 +144,7 @@ test.describe("interaction states", () => {
 
   test("empty state shows the intro with example prompts", async ({ page }) => {
     await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await expect(
       page.getByRole("button", { name: /scholarship may arrive late/i })
     ).toBeVisible();
@@ -154,7 +159,7 @@ test.describe("interaction states", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await sendMessage(page, "hello world");
     await expect(page.getByText(/Reading your request…|Planning…/)).toBeVisible({
       timeout: 10000,
@@ -166,7 +171,7 @@ test.describe("interaction states", () => {
 
   test("error state shows an alert and Retry recovers", async ({ page }) => {
     const mocks = await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await sendMessage(page, "ERROR-STREAM trigger please");
 
     const alert = page
@@ -189,7 +194,7 @@ test.describe("interaction states", () => {
     page,
   }) => {
     const mocks = await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await sendMessage(page, "TWO-QUESTIONS please");
 
     const fall = page.getByRole("button", { name: "Answer: Fall" });
@@ -213,7 +218,7 @@ test.describe("interaction states", () => {
 
   test("quick replies are keyboard-operable", async ({ page }) => {
     await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await sendMessage(page, "TWO-QUESTIONS please");
     const fall = page.getByRole("button", { name: "Answer: Fall" });
     await expect(fall).toBeVisible({ timeout: 15000 });
@@ -226,7 +231,7 @@ test.describe("interaction states", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     // Tab through the header controls until the composer has focus.
     for (let i = 0; i < 12; i++) {
       await page.keyboard.press("Tab");
@@ -252,7 +257,7 @@ test.describe("interaction states", () => {
     page,
   }) => {
     const mocks = await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await sendMessage(page, "ASSUMPTION-RESULT run it");
 
     await expect(page.getByText("You are on track.")).toBeVisible({
@@ -290,7 +295,7 @@ test.describe("interaction states", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await sendMessage(page, "remember this message xyz");
     await expect(page.getByText("Here's what I found.")).toBeVisible({
       timeout: 15000,
@@ -304,6 +309,7 @@ test.describe("interaction states", () => {
 
     // Reload: the transcript is restored.
     await page.reload();
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
     await expect(
       page.getByText("remember this message xyz", { exact: true })
     ).toBeVisible({ timeout: 15000 });
@@ -357,7 +363,7 @@ test.describe("interaction states", () => {
       localStorage.setItem(`studyrunway.chat.${sessionId}`, JSON.stringify(stored));
     });
 
-    await page.goto("/");
+    await openChat(page);
     await expect(
       page.getByText(/Your previous conversation expired when the server restarted/),
     ).toBeVisible();
@@ -376,7 +382,7 @@ test.describe("interaction states", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await sendMessage(page, "ASSUMPTION-RESULT run it");
     await expect(page.getByText("You are on track.")).toBeVisible({
       timeout: 15000,
@@ -400,7 +406,7 @@ test.describe("interaction states", () => {
     page,
   }) => {
     await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await expect(page.getByText("Demo mode", { exact: true })).toBeVisible();
   });
 });
@@ -408,7 +414,7 @@ test.describe("interaction states", () => {
 test.describe("reduced motion", () => {
   test("chat still works end to end with reduced motion", async ({ page }) => {
     await installMocks(page);
-    await page.goto("/");
+    await openChat(page);
     await page.emulateMedia({ reducedMotion: "reduce" });
     // The media query is honored by the page…
     expect(

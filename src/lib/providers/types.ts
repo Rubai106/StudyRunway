@@ -37,6 +37,11 @@ export interface ToolSchema {
   parameters: Record<string, unknown>;
 }
 
+export interface ChatOptions {
+  /** Ask compatible providers for a syntactically valid JSON object. */
+  responseFormat?: "json_object";
+}
+
 /** What a provider returns for one chat turn. */
 export interface ChatResult {
   /** Assistant text (may be empty when the model only calls tools). */
@@ -55,5 +60,9 @@ export interface Provider {
    * Implementations must apply their own HTTP timeout and surface HTTP
    * failures as thrown errors (never swallow them into `text`).
    */
-  chat(messages: ChatMessage[], tools: ToolSchema[]): Promise<ChatResult>;
+  chat(
+    messages: ChatMessage[],
+    tools: ToolSchema[],
+    options?: ChatOptions,
+  ): Promise<ChatResult>;
 }

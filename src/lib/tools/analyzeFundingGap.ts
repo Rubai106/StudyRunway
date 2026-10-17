@@ -85,9 +85,13 @@ const FUNDING_TERMS = /\b(?:savings?|cash|funds?|scholarships?|grants?|loans?|in
 const OBLIGATION_TERMS = /\b(?:tuition|fees?|bill|invoice|rent|deposit|living|travel|visa|insurance|payment|expense|cost|due|payable)\b/gi;
 
 function explicitMoneyMentions(text: string): MoneyMention[] {
-  // Mask ISO dates while preserving offsets so date components cannot be
-  // mistaken for currency amounts.
-  const withoutDates = text.replace(ISO_DATE_PATTERN, (date) => " ".repeat(date.length));
+  // Mask dates and explicit FX-rate declarations while preserving offsets so
+  // their digits cannot be mistaken for bill or funding amounts.
+  const withoutRates = text.replace(
+    new RegExp(`\\b1\\s+(?:${CURRENCY_PATTERN})\\s*(?:=|equals)\\s*\\d+(?:\\.\\d+)?\\s+(?:${CURRENCY_PATTERN})\\b`, "gi"),
+    (rate) => " ".repeat(rate.length),
+  );
+  const withoutDates = withoutRates.replace(ISO_DATE_PATTERN, (date) => " ".repeat(date.length));
   const mentions: MoneyMention[] = [];
   for (const match of withoutDates.matchAll(MONEY_PATTERN)) {
     const groups = match.groups;
@@ -101,6 +105,25 @@ function explicitMoneyMentions(text: string): MoneyMention[] {
     mentions.push({ amount, currency: before ?? after!, start, end: start + match[0].length });
   }
   return mentions;
+}
+
+function explicitExchangeRates(text: string): Record<string, number> {
+  const ratePattern = new RegExp(
+    `\\b1\\s+(?<from>${CURRENCY_PATTERN})\\s*(?:=|equals)\\s*(?<rate>\\d+(?:\\.\\d+)?)\\s+(?<to>${CURRENCY_PATTERN})\\b`,
+    "gi",
+  );
+  const rates: Record<string, number> = {};
+  for (const match of text.matchAll(ratePattern)) {
+    const from = match.groups?.from?.toUpperCase();
+    const to = match.groups?.to?.toUpperCase();
+    const rate = Number(match.groups?.rate);
+    if (from && to && Number.isFinite(rate) && rate > 0) rates[`${from}>${to}`] = rate;
+  }
+  return rates;
+}
+
+function hasExplicitConversion(rates: Record<string, number>, from: string, to: string): boolean {
+  return from === to || rates[`${from}>${to}`] != null || rates[`${to}>${from}`] != null;
 }
 
 function explicitDates(text: string): DatedMention[] {
@@ -123,6 +146,32 @@ function nearestTermDistance(text: string, term: RegExp, offset: number): number
   }));
 }
 
+/** Return the sentence containing a money mention without splitting decimals. */
+function sentenceAround(text: string, start: number, end: number): { text: string; offset: number } {
+  const isBoundary = (index: number) => {
+    const ch = text[index];
+    if (ch === "\n" || ch === "\r" || ch === ";" || ch === "!" || ch === "?") return true;
+    if (ch !== ".") return false;
+    // A dot between digits is a decimal point (e.g. 3,500.00), not a sentence end.
+    return !(/\d/.test(text[index - 1] ?? "") && /\d/.test(text[index + 1] ?? ""));
+  };
+  let left = 0;
+  for (let i = start - 1; i >= 0; i -= 1) {
+    if (isBoundary(i)) {
+      left = i + 1;
+      break;
+    }
+  }
+  let right = text.length;
+  for (let i = end; i < text.length; i += 1) {
+    if (isBoundary(i)) {
+      right = i;
+      break;
+    }
+  }
+  return { text: text.slice(left, right), offset: start - left };
+}
+
 /**
  * Recover the simple amounts/dates directly from the user's text. When this
  * strict parser can account for each explicit currency amount, use that data
@@ -135,23 +184,26 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
   // directly from an attachment turn; the extraction review must happen first.
   if (/I've attached the text of ["“]uploaded document["”] below\./i.test(text)) return null;
   const amounts = explicitMoneyMentions(text);
-  const dates = explicitDates(text);
   if (amounts.length === 0) return null;
 
   const asOfMatch = text.match(/\bas of\s+(\d{4}-\d{2}-\d{2})\b/i);
   const asOfDate = asOfMatch && ISO_DATE.safeParse(asOfMatch[1]).success
     ? asOfMatch[1]
     : undefined;
-  const planningCurrency = amounts[0].currency;
-  if (amounts.some((mention) => mention.currency !== planningCurrency)) return null;
+  const fxRates = explicitExchangeRates(text);
 
   const fundingSources: AnalyzeFundingGapInput["fundingSources"] = [];
   const obligations: AnalyzeFundingGapInput["obligations"] = [];
   for (const mention of amounts) {
-    const windowStart = Math.max(0, mention.start - 80);
-    const windowEnd = Math.min(text.length, mention.end + 80);
-    const nearby = text.slice(windowStart, windowEnd);
-    const localOffset = mention.start - windowStart;
+    // Restrict status/kind/date association to the sentence with this amount.
+    // A sliding window let a nearby scholarship or bill change the status of
+    // unrelated savings (and vice versa).
+    const sentence = sentenceAround(text, mention.start, mention.end);
+    const nearby = sentence.text;
+    // A hypothetical or proposed alternative is not part of the baseline
+    // forecast. Refuse the full text rather than silently count it as cash.
+    if (/\b(?:hypothetical|proposed|backup option|recovery option)\b/i.test(nearby)) return null;
+    const localOffset = sentence.offset;
     const fundingDistance = nearestTermDistance(nearby, FUNDING_TERMS, localOffset);
     const obligationDistance = nearestTermDistance(nearby, OBLIGATION_TERMS, localOffset);
     if (fundingDistance == null && obligationDistance == null) return null;
@@ -173,15 +225,19 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
               : fundingKind?.startsWith("income") ? "income"
                 : fundingKind === "family support" ? "family"
                   : "other";
-      const expectedDate = status === "confirmed_pending"
-        ? dates.filter((d) => Math.abs(d.start - mention.end) <= 100 && d.date !== asOfDate)
-            .sort((a, b) => Math.abs(a.start - mention.end) - Math.abs(b.start - mention.end))[0]?.date
+      const expectedDate = status === "confirmed_pending" || status === "conditional" || status === "estimated" || status === "unverified"
+        ? explicitDates(nearby).filter((d) => d.date !== asOfDate)
+            .sort((a, b) => Math.abs(a.start - localOffset) - Math.abs(b.start - localOffset))[0]?.date
+        : undefined;
+      const availableDate = status === "confirmed_available"
+        ? explicitDates(nearby).sort((a, b) => Math.abs(a.start - localOffset) - Math.abs(b.start - localOffset))[0]?.date
         : undefined;
       fundingSources.push({
         label: fundingKind ? `${fundingKind[0].toUpperCase()}${fundingKind.slice(1)}` : "Funding",
         amount: mention.amount,
         currency: mention.currency,
         status,
+        ...(availableDate ? { availableDate } : {}),
         ...(expectedDate ? { expectedDate } : {}),
         kind,
       });
@@ -193,9 +249,8 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
         : /\bplanned\b/i.test(nearby) ? "planned"
           : /\b(committed|bill|invoice|due|payable)\b/i.test(nearby) ? "committed"
             : undefined;
-    const dueDate = dates
-      .filter((d) => Math.abs(d.start - mention.end) <= 120)
-      .sort((a, b) => Math.abs(a.start - mention.end) - Math.abs(b.start - mention.end))[0]?.date;
+    const dueDate = explicitDates(nearby)
+      .sort((a, b) => Math.abs(a.start - localOffset) - Math.abs(b.start - localOffset))[0]?.date;
     if (!status || !dueDate) return null;
     const kind = /\btuition\b/i.test(nearby) ? "tuition"
       : /\bdeposit\b/i.test(nearby) ? "deposit"
@@ -210,17 +265,48 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
   }
 
   if (fundingSources.length === 0 || obligations.length === 0) return null;
+  const requestedPlanningCurrency = text.match(
+    new RegExp(`\\b(?:planning currency|plan(?:ning)? in|budget currency)\\s*(?:is|:)?\\s*(${CURRENCY_PATTERN})\\b`, "i"),
+  )?.[1]?.toUpperCase();
+  const planningCurrency = requestedPlanningCurrency ??
+    obligations.find((obligation) => obligation.kind === "tuition")?.currency ??
+    obligations[0].currency;
+  const currencies = new Set([
+    ...fundingSources.map((source) => source.currency),
+    ...obligations.map((obligation) => obligation.currency),
+  ]);
+  if ([...currencies].some((currency) => !hasExplicitConversion(fxRates, currency, planningCurrency))) return null;
+
+  const rateLabel = /\b(?:exchange|FX)\s+rate\b/i.exec(text);
+  const rateSentence = rateLabel && rateLabel.index !== undefined
+    ? sentenceAround(text, rateLabel.index, rateLabel.index + rateLabel[0].length).text
+    : "";
+  const rateDate = rateSentence.match(/\b(?:dated|as of)\s+(\d{4}-\d{2}-\d{2})/i)?.[1];
+  const fxAsOf = rateDate && ISO_DATE.safeParse(rateDate).success ? rateDate : undefined;
   const parsed = AnalyzeFundingGapParams.safeParse({
     planningCurrency,
     ...(asOfDate ? { asOfDate } : {}),
     fundingSources,
     obligations,
+    ...(Object.keys(fxRates).length ? {
+      fxRates,
+      ...(fxAsOf ? { fxAsOf } : {}),
+      fxSource: "User-provided exchange-rate assumption",
+    } : {}),
   });
   return parsed.success ? parsed.data : null;
 }
 
+/** Parse only the stated baseline that precedes an explicit recovery-options list. */
+export function extractScenarioFundingGapInputFromText(text: string): AnalyzeFundingGapInput | null {
+  const alternativeList = /\b(?:compare|evaluate|rank|consider)\s+(?:only\s+)?(?:these\s+)?(?:hypothetical\s+)?(?:backup\s+|recovery\s+|alternative\s+)?options?\s*:/i;
+  const match = alternativeList.exec(text);
+  if (!match || match.index === undefined) return extractFundingGapInputFromText(text);
+  return extractFundingGapInputFromText(text.slice(0, match.index));
+}
+
 /** Convert the model-friendly input into the engine's canonical plan shape. */
-function toToolPlan(input: AnalyzeFundingGapInput): ToolPlanInput {
+export function fundingGapInputToToolPlan(input: AnalyzeFundingGapInput): ToolPlanInput {
   const asOfDate = input.asOfDate ?? todayISO(null);
   return {
     planningCurrency: input.planningCurrency,
@@ -313,7 +399,7 @@ export const analyzeFundingGapTool: ToolDefinition = {
         }
         return analyzePlan(legacy.data.plan);
       }
-      return analyzePlan(toToolPlan(parsed.data));
+      return analyzePlan(fundingGapInputToToolPlan(parsed.data));
     }),
 };
 

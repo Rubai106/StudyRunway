@@ -78,7 +78,7 @@ function expectNoConsoleErrors(errors: string[]) {
 async function runSampleDemo(page: Page) {
   await page.goto("/");
   await page
-    .getByRole("button", { name: /Try the sample student budget/ })
+    .getByRole("button", { name: "Try sample budget", exact: true })
     .click();
   const verdict = page.getByText(
     "Shortfall — typical costs are above your budget",
@@ -139,6 +139,7 @@ test.describe("destination budget planner", () => {
   }) => {
     const errors = watchConsole(page);
     await page.goto("/");
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
     await sendMessage(page, "help me plan my living costs abroad");
 
     // Demo mode cannot reason — it asks an honest clarifying question.
@@ -264,6 +265,9 @@ test.describe("destination budget planner", () => {
     ).toBeVisible();
 
     // Revert removes exactly what was applied.
+    page.once("dialog", async (dialog) => {
+      await dialog.accept();
+    });
     await page
       .getByRole("button", { name: "Revert applied budget" })
       .click();
@@ -327,6 +331,7 @@ test.describe("destination budget planner", () => {
     });
 
     await page.goto("/");
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
     await sendMessage(page, "check canada budget please");
 
     await expect(
@@ -405,6 +410,9 @@ test.describe("destination budget planner", () => {
     await expect(
       page.getByText(/Applied 9 obligation\(s\) for Limerick, Ireland/),
     ).toBeVisible({ timeout: 30_000 });
+    page.once("dialog", async (dialog) => {
+      await dialog.accept();
+    });
     await page.getByRole("button", { name: "Revert applied budget" }).focus();
     await page.keyboard.press("Enter");
     await expect(
@@ -414,17 +422,16 @@ test.describe("destination budget planner", () => {
     expectNoConsoleErrors(errors);
   });
 
-  test("demo button itself is keyboard-operable from the welcome screen", async ({
+  test("dashboard sample budget button is keyboard-operable", async ({
     page,
   }) => {
     const errors = watchConsole(page);
     await page.goto("/");
     const demo = page.getByRole("button", {
-      name: /Try the sample student budget/,
+      name: "Try sample budget",
     });
-    // The welcome controls are intentionally disabled until the session-status
-    // restoration request completes. Focusing a disabled button is a no-op in
-    // Chromium, so wait for the control to become keyboard-available first.
+    // Dashboard actions are disabled until the session-status restoration
+    // request completes, so wait until the control is keyboard-available.
     await expect(demo).toBeEnabled({ timeout: 15_000 });
     await demo.focus();
     await expect(demo).toBeFocused();
@@ -435,11 +442,12 @@ test.describe("destination budget planner", () => {
     expectNoConsoleErrors(errors);
   });
 
-  test("[demo-mode · real engine] Safe-to-Send tuition demo exercises full delay, recovery, simulation, and revert workflow", async ({
+  test("[demo-mode · real engine] Safe-to-Send demo supports approval, sandbox simulation, timeline review, and revert", async ({
     page,
   }) => {
     const errors = watchConsole(page);
     await page.goto("/");
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
     const stsButton = page.getByRole("button", {
       name: /Try the Safe-to-Send tuition demo/,
     });
@@ -470,38 +478,20 @@ test.describe("destination budget planner", () => {
     ).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/Current stage:\s*SIMULATED/i)).toBeVisible();
 
-    // Now apply a funding delay (+14 days) to the scholarship
-    // Since tuition is now simulated for 2027-09-10, delaying scholarship to 2027-09-19 triggers an earliest shortfall!
-    const delayCombobox = page.locator("select").nth(1);
-    await delayCombobox.selectOption("14");
-    const applyDelayBtn = page.getByRole("button", { name: "Apply delay" });
-    await expect(applyDelayBtn).toBeEnabled();
-    await applyDelayBtn.click();
-    await expect(page.getByText(/Current stage:\s*SCENARIO_EVALUATED/i)).toBeVisible({
-      timeout: 15_000,
-    });
-
-    // Earliest shortfall analysis reflects the scenario shortfall
-    await expect(
-      page.getByText(/shortfall on 2027-09-10/i).first(),
-    ).toBeVisible({ timeout: 15_000 });
-
-    // Apply a recovery option
-    const applyAssumptionBtn = page.getByRole("button", { name: "Apply assumption" }).first();
-    await expect(applyAssumptionBtn).toBeVisible();
-    await applyAssumptionBtn.click();
-    await expect(page.getByText(/Current stage:\s*RECOVERY_REVIEW/i)).toBeVisible({
-      timeout: 15_000,
-    });
-
-    // Clear recovery assumption and delay
-    await page.getByRole("button", { name: "Clear recovery assumption" }).click();
-    await page.getByRole("button", { name: "Clear", exact: true }).click();
-    await page.getByRole("button", { name: "Recalculate deterministically" }).click();
+    // Review the current baseline funding timeline through its disclosure.
+    // Delay and recovery scenario controls are not part of this Safe-to-Send UI.
+    await page
+      .getByRole("button", { name: "Funding timeline (baseline projection)" })
+      .click();
+    await expect(page.getByText("Merit scholarship disbursement (demo)")).toBeVisible();
+    await expect(page.getByText("Family transfer from Bangladesh (demo)")).toBeVisible();
 
     // Revert latest simulation
     const revertBtn = page.getByRole("button", { name: "Revert latest simulation" });
     await expect(revertBtn).toBeEnabled();
+    page.once("dialog", async (dialog) => {
+      await dialog.accept();
+    });
     await revertBtn.click();
 
     // Status updates to REVERTED

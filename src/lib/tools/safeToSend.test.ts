@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { getTask, clearStore, updateTask } from "@/lib/agent/state";
 import { buildSamplePlan } from "@/lib/sample";
-import { getSafeToSendApprovalActions, runSafeToSendAction } from "@/lib/tools/safeToSend";
+import { getSafeToSendApprovalActions, runSafeToSendAction, upsertSafeToSendDraftTool } from "@/lib/tools/safeToSend";
 import { SAFE_TO_SEND_ACTION_ACKS } from "@/lib/tools/safeToSendApproval";
 
 function seedHighHeadroomPlan(sessionId: string): void {
@@ -22,6 +22,25 @@ function seedHighHeadroomPlan(sessionId: string): void {
 }
 
 describe("safe-to-send deterministic action invariants", () => {
+  it("upserts a repeated quote id without duplicating it or dropping other options", async () => {
+    const sid = "sts_quote_upsert";
+    const ctx = { sessionId: sid, taskId: "task-quote-upsert" };
+    const quoteA = {
+      id: "quote-a", providerName: "Provider A", sendCurrency: "BDT", sendAmountMinor: 40000000,
+      feeMinor: 100000, feeCurrency: "BDT", targetCurrency: "EUR", expectedReceiveMinor: 315000,
+      expectedDeliveryDate: "2027-09-08", verificationStatus: "user_provided_unverified" as const,
+    };
+    const quoteB = { ...quoteA, id: "quote-b", providerName: "Provider B" };
+    await upsertSafeToSendDraftTool.handler({ patch: { quotes: [quoteA, quoteB] } }, ctx);
+    await upsertSafeToSendDraftTool.handler({ patch: { quotes: [{ ...quoteA, expectedReceiveMinor: 320000 }] } }, ctx);
+
+    const draft = getTask(sid)?.safeToSend.draft as { quotes?: { id: string; expectedReceiveMinor?: number }[] } | null | undefined;
+    const quotes = draft?.quotes ?? [];
+    expect(quotes).toHaveLength(2);
+    expect(quotes.find((quote) => quote.id === "quote-a")?.expectedReceiveMinor).toBe(320000);
+    expect(quotes.some((quote) => quote.id === "quote-b")).toBe(true);
+  });
+
   it("has an explicit route acknowledgment for every approval-gated action", () => {
     expect(getSafeToSendApprovalActions()).toEqual(
       Object.keys(SAFE_TO_SEND_ACTION_ACKS).sort(),

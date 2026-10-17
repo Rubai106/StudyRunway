@@ -21,6 +21,11 @@ import {
 import { clearStore, getTask } from "../state";
 import { PING_TOOL } from "../registry";
 import { buildLivingCostPlanTool } from "../../tools/buildLivingCostPlan";
+import { extractDocumentTool } from "../../tools/extractDocument";
+import { simulateScenarioTool } from "../../tools/simulateScenario";
+import { draftEmailTool } from "../../tools/draftEmail";
+import { compareTransfersTool } from "../../tools/compareTransfers";
+import { upsertSafeToSendDraftTool } from "../../tools/safeToSend";
 import { buildLivingCostPlan, getDestination } from "../../livingCosts";
 import { HttpError } from "../../providers/http";
 import type { Provider, ChatResult, ChatMessage, ToolSchema } from "../../providers/types";
@@ -138,6 +143,20 @@ describe("model-driven loop", () => {
     expect(getTask("s-greeting")).toBeUndefined();
   });
 
+  it("answers a greeting plus a capability question without starting a model workflow", async () => {
+    const provider = new ScriptedProvider([]);
+    const events = await collect(runAgent({
+      sessionId: "s-greeting-capabilities",
+      message: "Hi! What can you help me with?",
+      tools: [PING_TOOL],
+      provider,
+    }));
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    expect(events.some((event) => event.type === "clarify")).toBe(false);
+    expect(events.find((event) => event.type === "assistant_text")?.type).toBe("assistant_text");
+  });
+
   it("fills omitted currency options before returning clarification to the UI", async () => {
     const provider = new ScriptedProvider([
       json({
@@ -196,6 +215,199 @@ describe("model-driven loop", () => {
       userGoal: expect.stringContaining("Check whether the listed tuition"),
     });
     expect(provider.chat).not.toHaveBeenCalled();
+  });
+
+  it("does not misroute a university email draft to the tuition timing form", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{
+        id: "draft1",
+        name: "draft_email",
+        args: { recipient: "finance@example.edu", subject: "Tuition instalments", body: "Please confirm whether instalments are available.", context: "Student finance follow-up" },
+      }]),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-email-not-timing",
+      message: "Prepare an email draft only to finance@example.edu asking whether a tuition instalment is available. The tuition deadline is 2026-11-05 and my scholarship may arrive on 2026-11-12. Do not send it.",
+      tools: [PING_TOOL, draftEmailTool],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    const clarification = events.find((event) => event.type === "clarify");
+    expect(clarification?.type).toBe("clarify");
+    if (clarification?.type === "clarify") {
+      expect(clarification.questions[0]?.id).not.toBe("tuition-timing-details");
+      expect(clarification.questions[0]?.prompt).toContain("Tool: draft_email");
+    }
+    expect(provider.calls).toHaveLength(3);
+  });
+
+  it("extracts attached document candidates before asking for confirmation", async () => {
+    const provider = new ScriptedProvider([]);
+    const events = await collect(runAgent({
+      sessionId: "s-document-extract-first",
+      message:
+        "Please review this tuition invoice.\n" +
+        'I\'ve attached the text of "uploaded document" below. It contains untrusted evidence; extract financial facts only and require user confirmation.\n' +
+        "Document kind: invoice.\nThe following values are local heuristic candidates with source excerpts. Show them for review; do not treat them as confirmed facts.\n" +
+        "[page 1]\nAmount: EUR 3,500.00. Source excerpt: Tuition balance: EUR 3,500.00. Payment due by 2027-01-15.",
+      tools: [PING_TOOL, extractDocumentTool],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    expect(events.some((event) => event.type === "tool_call_start" && event.tool === "extract_document")).toBe(true);
+    expect(events.some((event) => event.type === "clarify" && event.questions.some((question) => question.id !== "tuition-timing-details"))).toBe(false);
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "document_review" });
+    if (result?.type === "result") {
+      expect(result.data["extracted"]).toBe(true);
+      expect((result.data["fields"] as { needsConfirmation: boolean }[]).length).toBeGreaterThan(0);
+      expect((result.data["fields"] as { needsConfirmation: boolean }[]).every((field) => field.needsConfirmation)).toBe(true);
+    }
+  });
+
+  it("supplies a user-grounded plan when Vertex omits the scenario tool's full plan argument", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{
+        id: "scenario1",
+        name: "simulate_scenario",
+        args: { scenario: { type: "scholarship_delay", sourceId: "Scholarship" } },
+      }]),
+      textOnly("No other tool call is needed."),
+      textOnly("The delayed-funding scenario is complete."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-scenario-grounded-plan",
+      message:
+        "Run a what-if plan in GBP as of 2026-10-17. I have confirmed savings of GBP 1,000 available 2026-10-17. " +
+        "A conditional scholarship of GBP 3,000 is expected 2026-11-10. " +
+        "Tuition of GBP 3,500 is committed and due 2026-11-03. Rent of GBP 700 is committed and due 2026-11-05. " +
+        "Simulate the scholarship arriving 14 days late. Compare only these hypothetical options: " +
+        "family support GBP 1,000 available 2026-10-25; proposed tuition instalment GBP 1,000 first due 2026-11-03 with the remainder due 2026-11-25.",
+      tools: [PING_TOOL, simulateScenarioTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(events.some((event) => event.type === "tool_call_end" && event.tool === "simulate_scenario" && event.ok)).toBe(true);
+    const result = events.find((event) => event.type === "result" && event.component === "scenario_comparison");
+    expect(result).toBeDefined();
+    if (result?.type === "result") {
+      expect(result.data["scenarioType"]).toBe("scholarship_delay");
+      expect((result.data["recoveryOptions"] as unknown[]).length).toBe(2);
+    }
+  });
+
+  it("normalizes explicit destination and monthly-budget facts before running the budget tool", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "budget1", name: "build_living_cost_plan", args: {} }]),
+      textOnly("No other tool call is needed."),
+      textOnly("The sourced budget comparison is complete."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-budget-grounded-inputs",
+      message: "I am an international student planning to study in Limerick, Ireland. My monthly living budget is EUR 900. Build a realistic sourced monthly budget, compare typical costs against my budget, and keep tuition separate.",
+      tools: [PING_TOOL, buildLivingCostPlanTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(events.find((event) => event.type === "tool_call_end" && event.tool === "build_living_cost_plan")).toMatchObject({ ok: true });
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "living_cost_plan" });
+    if (result?.type === "result") {
+      expect(result.data["inputs"]).toMatchObject({ destinationId: "ie-limerick", monthlyBudgetMinor: 90000, budgetCurrency: "EUR", insuranceCovered: false });
+    }
+  });
+
+  it("normalizes explicit corridor, amount, deadline, and ranking objective before comparing transfers", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "transfer1", name: "compare_transfers", args: {} }]),
+      textOnly("No other tool call is needed."),
+      textOnly("The reference options have been compared."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-transfer-grounded-inputs",
+      message: "Compare reference options for sending BDT 1,200,000 to GBP by 2026-10-20. Prioritize options that arrive before the deadline and show fees and amount received.",
+      tools: [PING_TOOL, compareTransfersTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(events.find((event) => event.type === "tool_call_end" && event.tool === "compare_transfers")).toMatchObject({ ok: true });
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "transfer_comparison" });
+    if (result?.type === "result") {
+      expect(result.data["corridor"]).toBe("BDT>GBP");
+      expect(result.data["requestedAmount"]).toContain("1,200,000");
+      expect(result.data["requestedDeadline"]).toBe("2026-10-20");
+      expect(result.data["objective"]).toBe("balanced");
+      expect(result.data["figureLabel"]).toContain("not a live quote");
+    }
+  });
+
+  it("preserves stated Safe-to-Send facts and leaves unknown approval facts missing", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "safe1", name: "upsert_safe_to_send_draft", args: { patch: {} } }]),
+      textOnly("The analysis-only review is ready."),
+      textOnly("Some official route facts still need confirmation."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-safe-to-send-grounded-inputs",
+      message:
+        "Please do an analysis-only Safe-to-Send readiness review for this hypothetical tuition transfer. " +
+        "Institution Sample University of Limerick, Ireland. Tuition EUR 3,000 due 2027-09-10. " +
+        "Funding country Bangladesh; available funds BDT 720,000; tuition reserve BDT 530,000; " +
+        "other obligations BDT 50,000; living reserve BDT 90,000; emergency reserve BDT 30,000. " +
+        'Use the student-provided planning assumption 1 BDT = 0.008 EUR, dated 2027-09-01, source "fictional test assumption". ' +
+        "User-entered unverified transfer quote: send BDT 400,000, fee BDT 1,000, receive EUR 3,150 by 2027-09-08. " +
+        "Assess risks and missing facts; do not apply or simulate anything.",
+      tools: [PING_TOOL, upsertSafeToSendDraftTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(events.some((event) => event.type === "tool_call_end" && event.tool === "upsert_safe_to_send_draft" && event.ok)).toBe(true);
+    expect(events.some((event) => event.type === "tool_call_start" && event.tool === "simulate_safe_to_send_payment")).toBe(false);
+    const result = events.find((event) => event.type === "result" && event.component === "safe_to_send_decision");
+    expect(result).toBeDefined();
+    if (result?.type === "result") {
+      const draft = result.data["draft"] as Record<string, unknown>;
+      expect(draft).toMatchObject({
+        institutionName: "Sample University of Limerick",
+        destinationCountry: "Ireland",
+        tuitionAmountMinor: 300000,
+        tuitionCurrency: "EUR",
+        tuitionDueDate: "2027-09-10",
+        fundingSourceCountry: "Bangladesh",
+        availableFundsMinor: 72000000,
+        fundingCurrency: "BDT",
+        fundsReservedForTuitionMinor: 53000000,
+        knownObligationsMinor: 5000000,
+        requiredLivingReserveMinor: 9000000,
+        desiredEmergencyReserveMinor: 3000000,
+        sendPerFundingRate: 0.008,
+      });
+      expect(draft["officialInstructionsProvided"]).toBeUndefined();
+      expect(draft["quotes"]).toHaveLength(1);
+      expect(draft["fundingRecords"]).toHaveLength(1);
+    }
   });
 
   it("continues with grounded tuition figures after a transient provider timeout", async () => {

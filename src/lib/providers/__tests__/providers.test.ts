@@ -9,6 +9,7 @@ import { createXaiProvider, readXaiConfig, DEFAULT_XAI_MODEL } from "../xai";
 import { createOpenAiProvider, readOpenAiConfig } from "../openai";
 import { createGeminiProvider, readGeminiConfig, DEFAULT_GEMINI_BASE_URL, DEFAULT_GEMINI_MODEL } from "../gemini";
 import { createAnthropicProvider, readAnthropicConfig } from "../anthropic";
+import { createVertexProvider } from "../vertex";
 import { selectProvider } from "../index";
 import { postJson } from "../http";
 import { toJsonSchema } from "../zodjson";
@@ -25,6 +26,26 @@ const TOOLS: ToolSchema[] = [
     parameters: { type: "object", properties: { x: { type: "number" } } },
   },
 ];
+
+describe("Vertex adapter", () => {
+  it("requests JSON mode for structured agent prompts", async () => {
+    let gotBody: Record<string, unknown> = {};
+    const fakePost = vi.fn(async (_url: string, opts: { body: unknown }) => {
+      gotBody = opts.body as Record<string, unknown>;
+      return { choices: [{ message: { content: '{"ok":true}' }, finish_reason: "stop" }] };
+    });
+    const provider = createVertexProvider(
+      { projectId: "test-project-12345", location: "global", model: "google/gemini-3.5-flash" },
+      fakePost as unknown as typeof postJson,
+      async () => "test-token",
+    );
+
+    const result = await provider.chat(MESSAGES, [], { responseFormat: "json_object" });
+
+    expect(gotBody.response_format).toEqual({ type: "json_object" });
+    expect(result.text).toBe('{"ok":true}');
+  });
+});
 
 const savedEnv = { ...process.env };
 

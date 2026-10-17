@@ -9,6 +9,7 @@ import { GoogleAuth } from "google-auth-library";
 import { postJson } from "./http";
 import type {
   ChatMessage,
+  ChatOptions,
   ChatResult,
   Provider,
   ToolCallRequest,
@@ -148,12 +149,15 @@ export function createVertexProvider(
   const url = vertexChatCompletionsUrl(cfg.projectId, cfg.location);
   return {
     name: "vertex",
-    async chat(messages: ChatMessage[], tools: ToolSchema[]): Promise<ChatResult> {
+    async chat(messages: ChatMessage[], tools: ToolSchema[], options?: ChatOptions): Promise<ChatResult> {
       const token = await tokenSource();
       const body: Record<string, unknown> = {
         model: cfg.model,
         messages: toWireMessages(messages),
       };
+      if (options?.responseFormat === "json_object") {
+        body.response_format = { type: "json_object" };
+      }
       if (tools.length > 0) {
         body.tools = tools.map((tool) => ({
           type: "function",
