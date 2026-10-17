@@ -114,6 +114,9 @@ function originalRequestForState(text: string): string {
  */
 function confirmedAnswersAsFinancialText(facts: TaskState["confirmedFacts"]): string[] {
   const statements: string[] = [];
+  let tuitionAmount: number | null = null;
+  let tuitionCurrency: string | null = null;
+  let tuitionDueDate: string | null = null;
   for (const fact of facts) {
     if (fact.source !== "user") continue;
     let parsed: unknown;
@@ -142,7 +145,10 @@ function confirmedAnswersAsFinancialText(facts: TaskState["confirmedFacts"]): st
         const pending = /\b(expected|arriv|receive|pending|approved)\b/.test(question);
         statements.push(`${currencyCode} ${amount} ${pending ? "expected scholarship confirmed pending" : "available funds confirmed available"}`);
       } else if (isObligationQuestion && !isFundingQuestion) {
-        statements.push(`${currencyCode} ${amount} tuition bill committed`);
+        if (/\b(tuition|fee|bill|invoice|payment)\b/.test(question)) {
+          tuitionAmount = amount;
+          tuitionCurrency = currencyCode;
+        }
       }
     }
 
@@ -150,7 +156,10 @@ function confirmedAnswersAsFinancialText(facts: TaskState["confirmedFacts"]): st
       const date = typeof answer === "string"
         ? answer.trim()
         : typeof answerRecord?.date === "string" ? answerRecord.date.trim() : "";
-      if (ISO_DATE.safeParse(date).success) statements.push(`tuition payment due date ${date}`);
+      if (ISO_DATE.safeParse(date).success) {
+        statements.push(`tuition payment due date ${date}`);
+        tuitionDueDate = date;
+      }
     } else if (/\b(arriv|expected|disbursement)\b/.test(question)) {
       const date = typeof answer === "string"
         ? answer.trim()
@@ -158,7 +167,10 @@ function confirmedAnswersAsFinancialText(facts: TaskState["confirmedFacts"]): st
       if (ISO_DATE.safeParse(date).success) statements.push(`scholarship expected date ${date}`);
     }
   }
-  return statements;
+  if (tuitionAmount != null && tuitionCurrency && tuitionDueDate) {
+    statements.push(`${tuitionCurrency} ${tuitionAmount} tuition bill committed due ${tuitionDueDate}`);
+  }
+  return [...new Set(statements)];
 }
 
 /** Zod schemas for the exact SSE shapes (used by tests + runtime asserts). */
