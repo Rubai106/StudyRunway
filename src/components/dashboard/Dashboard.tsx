@@ -622,7 +622,7 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
             <div>
               <p className="text-xs font-semibold text-[var(--sr-pine)]">Pay by the deadline</p>
               <h3 id="dashboard-transfer-plan-title" className="mt-1 text-lg font-bold">Compare tuition transfer offers</h3>
-              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--sr-ink)]/60">Compare provider quotes by what the university receives after FX, sending and recipient fees, delivery windows, and limits. The app has no live provider feed.</p>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--sr-ink)]/60">Fetch an indicative Wise quote when enabled, then compare it with provider quotes by recipient amount, fees, delivery window, and tuition deadline. Other providers are entered manually; recipient-bank charges must be confirmed.</p>
             </div>
           </div>
           <button type="button" onClick={() => onAsk("Help me compare transfer offers for a tuition payment. Ask for the send and receive currencies, amount, payment deadline, and each actual provider quote: rate, whether sender fee is deducted or added, sender fee, intermediary or recipient fee, delivery window, quote time, and any send limits. Rank deadline-feasible offers by net amount the university receives. Mark user-entered quotes as unverified, exclude unknown fees from confident rankings, and never invent a live rate or claim that a reference estimate is a provider quote.")} disabled={disabled} className="shrink-0 rounded-xl bg-[var(--sr-pine)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/90 disabled:opacity-50">

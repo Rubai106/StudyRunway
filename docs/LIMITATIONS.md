@@ -4,13 +4,12 @@ Honest boundaries, so nobody mistakes the demo for more than it is.
 
 ## Data & liveness
 
-- **No automatic live FX or transfer feed.** The engine converts currencies
-  with caller-supplied FX assumption tables. `compare_transfers` uses the
-  engine's **sample/reference quotes only** — every figure is labelled
-  `"reference estimate — not a live quote"`, the quote timestamp is
-  `"sample data"`. The result card can compare quote details the user enters
-  manually, including fee handling, recipient charges, quote date, delivery
-  window, and send limits; it cannot verify those entries or refresh them.
+- **Wise preview is optional and indicative.** When enabled, the result card
+  fetches a fresh Wise display quote. It is not rate-locked, cannot be used to
+  create a transfer, may not include receiving-bank/intermediary deductions,
+  and requires confirmation before a financial decision. The chat
+  `compare_transfers` tool still uses sample/reference data. The planning
+  engine's FX table remains based on caller-supplied assumptions.
 - **Policy research needs Vertex AI ADC and Search grounding.** `research_policy`
   uses Vertex Gemini with Google Search grounding when configured. It requires
   country context and, for tuition/instalment/scholarship questions, the named
@@ -21,21 +20,21 @@ Honest boundaries, so nobody mistakes the demo for more than it is.
   answer. Check the project's Search grounding availability and Google Search
   Suggestions settings, then rerun `npm run verify:live-ai`. Domain recognition
   is conservative and unusual official domains may need to be confirmed.
-- **No provider-fed quotes, booking, or payments.** The tool compares reference
-  quotes, and the result card can compare current quote details entered by the
-  user; those entries are not independently checked. The app never claims a
-  transfer was sent, initiated, or locked in. `draft_email` drafts only —
-  sending is not implemented. Payment execution is intentionally not connected
-  to a provider.
+- **No transfer booking or payments.** Wise can provide an indicative quote
+  preview when enabled, but the app never claims a transfer was sent, initiated,
+  or rate-locked. Other provider quotes entered by the user are not independently
+  checked. `draft_email` drafts only — sending is not implemented. Payment
+  execution is intentionally not connected to a provider.
 - **Reminders are browser-local.** They are stored on this device and can send
   generic browser alerts while StudyRunway is open and notification permission
   is granted. There is no background push delivery after the app is closed and
   no cross-device sync.
-- **Transfer provider remains unselected.** The app cannot fetch live FX
-  margins, recipient charges, delivery estimates, or provider limits. Manually
-  entered quotes stay in the current result view and are not independently
-  validated. The World Bank's Q3 2025 average is shown only as a period-labeled
-  benchmark, never as a quote.
+- **Wise Platform onboarding is external.** The opt-in Wise quote preview uses
+  standard indicative pricing. Wise partner-specific pricing needs OAuth client
+  credentials and mTLS, which are not implemented. Other providers' live FX
+  margins, recipient charges, delivery estimates, and limits still require
+  manually entered offers. The World Bank's Q3 2025 average is only a
+  period-labeled benchmark, never a quote.
 
 ## Model & providers
 

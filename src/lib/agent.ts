@@ -258,7 +258,7 @@ export function runAgent(state: PlanState, message: string, mode: AgentMode = "d
         `for ${b.receivedMinor != null && a.receivedMinor != null ? money(b.receivedMinor - (a.receivedMinor ?? 0), b.receiveCurrency) : "?"} difference in amount received.`,
       );
     }
-    warnings.push("Quotes are samples you enter — StudyRunway shows no live rates and executes no transfer.");
+    warnings.push("This comparison uses sample quotes, not a live provider feed. The dashboard can fetch a separate indicative Wise quote when enabled. StudyRunway executes no transfer.");
     if (ranked.length > 0) {
       nextSteps.push({
         title: `Use ${ranked[0].quote.provider} for the next transfer`,

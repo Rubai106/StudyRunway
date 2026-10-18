@@ -133,8 +133,10 @@ only receives provider/model labels from the status endpoint.
   recipient charges, quote date, delivery window, and send limits. It ranks
   only complete quotes that meet the deadline, by amount received, sender cost,
   or speed. Entered quote values are not saved, sent, or independently verified.
-  With no provider configured, the app still has no automatic feed of live
-  transfer fees, recipient charges, delivery times, or limits.
+  Separately, the manual comparison card can fetch an opt-in, indicative Wise
+  quote through `/api/transfers/wise-quote`; that quote is not locked or
+  executable, and recipient-bank/intermediary charges remain a separate
+  unknown. Other providers still have no automatic quote feed.
 - `simulate_scenario` can compare up to eight user-stated recovery options
   (additional funding or a tuition installment), each independently against
   the stressed forecast. It reports the remaining gap and labels funding

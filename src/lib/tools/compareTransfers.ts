@@ -1,12 +1,11 @@
 /**
  * compare_transfers — deadline-aware transfer comparison.
  *
- * HONESTY RULE (hard): there is no live rate/fee/quote feed in this build,
- * so the tool never invents one. It compares the engine's reference/sample
- * transfer quotes (src/lib/sample.ts) for the requested currency corridor,
- * analyzed with the deterministic analyzeQuote() arithmetic. Every figure
- * is labelled "reference estimate — not a live quote" and the quote
- * timestamp is "sample data".
+ * HONESTY RULE (hard): this chat tool does not fetch live provider data.
+ * It compares the engine's reference/sample transfer quotes (src/lib/sample.ts)
+ * for the requested currency corridor, analyzed with deterministic arithmetic.
+ * The dashboard's separate Wise quote preview is live only when enabled; it
+ * is not silently substituted into this reference-data tool.
  *
  * - A missing fee is NEVER treated as zero: such quotes are flagged
  *   incomplete, their received amount is null, and they are excluded
@@ -80,8 +79,8 @@ export const compareTransfersTool: ToolDefinition = {
   description:
     "Compare money-transfer options for a corridor (e.g. BDT → GBP) using the engine's reference/sample " +
     "quotes — analyzed with deterministic arithmetic and ranked by the caller's objective (min_total_cost, " +
-    "fastest, or balanced), deadline-aware. HONESTY: no live rates exist in this build; every figure is a " +
-    "labelled reference estimate, never a live quote. Missing fees are never treated as zero.",
+    "fastest, or balanced), deadline-aware. HONESTY: this tool returns labelled reference estimates only; " +
+    "the separate dashboard Wise preview is an indicative provider quote and is not used here. Missing fees are never treated as zero.",
   parameters: CompareTransfersParams,
   requiresApproval: false,
   safeToReplayForVerification: true,

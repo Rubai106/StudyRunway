@@ -79,6 +79,15 @@ sample case (Limerick, Ireland — €900/mo, shared accommodation) through the
 real tool path, honestly labelled. Or type any message and answer the
 clarifying question it asks.
 
+### Wise transfer quote preview
+
+The transfer-comparison card can fetch an indicative Wise quote for display
+when `WISE_QUOTES_ENABLED=true`. It shows the live rate, provider fees, payout
+method, and ETA, and can add a selected option to the manual comparison. The
+quote is not locked or executable, recipient-bank charges remain a separate
+unknown, and other providers still require manually entered quotes. Wise quote
+preview setup and Cloud Run instructions are in `docs/WISE_QUOTES_SETUP.md`.
+
 ## Judge-ready Funding Risk Agent (deterministic-first)
 
 ### Structured funding details

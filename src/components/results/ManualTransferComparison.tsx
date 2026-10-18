@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { CURRENCIES, formatMinor } from "@/lib/currency";
-import { toMinor } from "@/lib/money";
+import { CURRENCIES, formatMinor, getCurrency, isSupportedCurrency } from "@/lib/currency";
+import { toMajor, toMinor } from "@/lib/money";
 import {
   compareManualTransferQuotes,
   type ManualTransferComparisonInput,
@@ -20,6 +20,41 @@ interface QuoteDraft {
   quoteCheckedAt: string;
   minimumSend: string;
   maximumSend: string;
+}
+
+interface WiseQuoteOption {
+  id: string;
+  payIn: string;
+  payOut: string;
+  sourceAmount: number;
+  targetAmount: number;
+  rate: number;
+  feeAmount: number | null;
+  feeCurrency: string;
+  priceTotal: number | null;
+  priceCurrency: string;
+  estimatedDelivery: string | null;
+  formattedEstimatedDelivery: string | null;
+}
+
+interface WiseQuotePreviewData {
+  provider: "Wise";
+  quoteType: string;
+  environment: "production" | "sandbox";
+  sourceCurrency: string;
+  targetCurrency: string;
+  requestedSourceAmount: number;
+  sourceAmount: number;
+  targetAmount: number;
+  rate: number;
+  checkedAt: string;
+  createdTime: string;
+  expirationTime: string | null;
+  rateExpirationTime: string | null;
+  options: WiseQuoteOption[];
+  sourceUrl: string;
+  canCreateTransfer: false;
+  rateLocked: false;
 }
 
 function blankQuote(): QuoteDraft {
@@ -51,6 +86,27 @@ function displayDate(date: string): string {
   return new Date(`${date}T00:00:00`).toLocaleDateString();
 }
 
+function formatMajor(amount: number, currency: string): string {
+  return formatMinor(toMinor(amount, currency), currency);
+}
+
+function localDateTimeInput(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function calendarDaysBetween(from: string, to: string): number | null {
+  const fromDay = from.slice(0, 10);
+  const toDay = to.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDay) || !/^\d{4}-\d{2}-\d{2}$/.test(toDay)) return null;
+  const start = new Date(`${fromDay}T00:00:00Z`).getTime();
+  const end = new Date(`${toDay}T00:00:00Z`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(0, Math.round((end - start) / 86_400_000));
+}
+
 export default function ManualTransferComparison({
   data,
 }: {
@@ -66,6 +122,103 @@ export default function ManualTransferComparison({
   const [quotes, setQuotes] = useState<QuoteDraft[]>([blankQuote(), blankQuote()]);
   const [comparison, setComparison] = useState<ReturnType<typeof compareManualTransferQuotes> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wiseQuote, setWiseQuote] = useState<WiseQuotePreviewData | null>(null);
+  const [wiseLoading, setWiseLoading] = useState(false);
+  const [wiseError, setWiseError] = useState<string | null>(null);
+  const [wiseImportNotice, setWiseImportNotice] = useState<string | null>(null);
+
+  const wiseQuoteMatchesCurrentInputs = (() => {
+    if (!wiseQuote || !sendAmount.trim()) return false;
+    const amount = Number(sendAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return false;
+    try {
+      return wiseQuote.sourceCurrency === sendCurrency &&
+        wiseQuote.targetCurrency === receiveCurrency &&
+        toMinor(wiseQuote.requestedSourceAmount, sendCurrency) === toMinor(amount, sendCurrency);
+    } catch {
+      return false;
+    }
+  })();
+
+  const fetchWiseQuote = async () => {
+    setWiseError(null);
+    setWiseImportNotice(null);
+    setWiseQuote(null);
+    setComparison(null);
+    const amount = Number(sendAmount);
+    if (!sendAmount.trim() || !Number.isFinite(amount) || amount <= 0) {
+      setWiseError("Enter a positive amount before requesting a Wise quote.");
+      return;
+    }
+    if (sendCurrency === receiveCurrency) {
+      setWiseError("Choose different send and recipient currencies for a Wise quote.");
+      return;
+    }
+
+    setWiseLoading(true);
+    try {
+      const response = await fetch("/api/transfers/wise-quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceCurrency: sendCurrency, targetCurrency: receiveCurrency, sourceAmount: amount }),
+        cache: "no-store",
+      });
+      const payload = await response.json() as { ok?: boolean; error?: string; data?: WiseQuotePreviewData };
+      if (!response.ok || !payload.ok || !payload.data) {
+        throw new Error(payload.error || "Wise quote request failed. No estimate was substituted.");
+      }
+      setWiseQuote(payload.data);
+    } catch (quoteError) {
+      setWiseError(quoteError instanceof Error ? quoteError.message : "Could not fetch a Wise quote.");
+    } finally {
+      setWiseLoading(false);
+    }
+  };
+
+  const addWiseOptionToComparison = (option: WiseQuoteOption) => {
+    if (!wiseQuoteMatchesCurrentInputs || !wiseQuote) {
+      setWiseError("The Wise quote no longer matches the amount or currencies above. Fetch a fresh quote first.");
+      return;
+    }
+    if (Math.abs(option.sourceAmount - Number(sendAmount)) > 1 / (2 * 10 ** getCurrency(sendCurrency).minorUnits)) {
+      setWiseError("This Wise payment option returned a different send amount. It cannot be ranked against the current amount.");
+      return;
+    }
+
+    const feeCurrency = (option.priceCurrency || option.feeCurrency).toUpperCase();
+    const comparisonFee = feeCurrency === sendCurrency
+      ? (option.priceTotal != null && option.priceTotal >= 0 ? option.priceTotal : option.feeAmount)
+      : null;
+    const deliveryDays = option.estimatedDelivery
+      ? calendarDaysBetween(wiseQuote.checkedAt, option.estimatedDelivery)
+      : null;
+    const feeMinor = comparisonFee != null ? toMinor(comparisonFee, sendCurrency) : null;
+    const quote: QuoteDraft = {
+      provider: `Wise (${option.payIn} / ${option.payOut})`,
+      exchangeRate: String(option.rate),
+      feeTreatment: "deducted",
+      senderFee: feeMinor == null ? "" : String(toMajor(feeMinor, sendCurrency)),
+      recipientFee: "",
+      deliveryDaysMin: deliveryDays == null ? "" : String(deliveryDays),
+      deliveryDaysMax: deliveryDays == null ? "" : String(deliveryDays),
+      quoteCheckedAt: localDateTimeInput(wiseQuote.checkedAt),
+      minimumSend: "",
+      maximumSend: "",
+    };
+    const firstEmpty = quotes.findIndex((entry) => !entry.provider.trim());
+    if (firstEmpty < 0 && quotes.length >= 6) {
+      setWiseError("The comparison already has six provider options. Remove one before adding Wise.");
+      return;
+    }
+    setQuotes((current) => {
+      const emptyIndex = current.findIndex((entry) => !entry.provider.trim());
+      if (emptyIndex >= 0) return current.map((entry, index) => index === emptyIndex ? quote : entry);
+      return [...current, quote];
+    });
+    setComparison(null);
+    setWiseError(null);
+    setWiseImportNotice("Added to the comparison form. Enter the receiving bank or intermediary fee; leave the option unranked if that charge is still unknown.");
+  };
 
   const updateQuote = (index: number, field: keyof QuoteDraft, value: string) => {
     setQuotes((current) => current.map((quote, i) => i === index ? { ...quote, [field]: value } : quote));
@@ -141,18 +294,18 @@ export default function ManualTransferComparison({
       <form className="mt-3 space-y-4" onSubmit={onSubmit}>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className={labelClass}>
-            Principal amount before fees ({sendCurrency})
-            <input className={inputClass} type="number" min="0.01" step="any" required value={sendAmount} onChange={(event) => { setSendAmount(event.target.value); setComparison(null); }} />
+            Amount to send ({sendCurrency})
+            <input className={inputClass} type="number" min="0.01" step="any" required value={sendAmount} onChange={(event) => { setSendAmount(event.target.value); setComparison(null); setWiseImportNotice(null); }} />
           </label>
           <label className={labelClass}>
             Send currency
-            <select className={inputClass} value={sendCurrency} onChange={(event) => { setSendCurrency(event.target.value); setComparison(null); }}>
+            <select className={inputClass} value={sendCurrency} onChange={(event) => { setSendCurrency(event.target.value); setComparison(null); setWiseImportNotice(null); }}>
               {CURRENCIES.map((currency) => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}
             </select>
           </label>
           <label className={labelClass}>
             Recipient currency
-            <select className={inputClass} value={receiveCurrency} onChange={(event) => { setReceiveCurrency(event.target.value); setComparison(null); }}>
+            <select className={inputClass} value={receiveCurrency} onChange={(event) => { setReceiveCurrency(event.target.value); setComparison(null); setWiseImportNotice(null); }}>
               {CURRENCIES.map((currency) => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}
             </select>
           </label>
@@ -172,6 +325,60 @@ export default function ManualTransferComparison({
               <option value="fastest">Fastest arrival</option>
             </select>
           </label>
+        </div>
+
+        <div className="rounded-xl border border-[var(--sr-pine)]/20 bg-[var(--sr-pine)]/[0.035] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold text-[var(--sr-ink)]">Get a Wise quote</p>
+              <p className="mt-1 max-w-2xl text-[11px] leading-relaxed text-[var(--sr-ink)]/60">
+                Fetches a fresh Wise display estimate for the amount and currency pair above. The quote is not rate-locked and cannot initiate a transfer.
+              </p>
+            </div>
+            <button type="button" onClick={fetchWiseQuote} disabled={wiseLoading} className="shrink-0 rounded-lg border border-[var(--sr-pine)]/30 bg-white px-3 py-2 text-xs font-semibold text-[var(--sr-pine)] hover:bg-[var(--sr-pine)]/5 disabled:opacity-50">
+              {wiseLoading ? "Getting Wise quote…" : "Fetch Wise quote"}
+            </button>
+          </div>
+          {wiseError && <p role="alert" className="mt-3 rounded-lg bg-[var(--sr-clay)]/10 p-2.5 text-xs text-[var(--sr-clay)]">{wiseError}</p>}
+          {wiseImportNotice && <p role="status" className="mt-3 rounded-lg bg-[var(--sr-pine)]/10 p-2.5 text-xs text-[var(--sr-pine)]">{wiseImportNotice}</p>}
+          {wiseQuote && (
+            <div className="mt-3 space-y-2" aria-live="polite">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--sr-pine)]">
+                {wiseQuote.environment === "production" ? "Wise live indicative estimate" : "Wise sandbox estimate · not live"}
+                {wiseQuoteMatchesCurrentInputs ? " · current inputs" : " · stale for current inputs"}
+              </p>
+              {!wiseQuoteMatchesCurrentInputs && <p className="text-xs text-[var(--sr-clay)]">The amount or currency route changed. Fetch a new quote before adding it to this comparison.</p>}
+              {wiseQuote.options.map((option) => {
+                const priceCurrency = (option.priceCurrency || option.feeCurrency).toUpperCase();
+                const canShowPriceTotal = option.priceTotal != null && isSupportedCurrency(priceCurrency);
+                const canShowFee = option.feeAmount != null && isSupportedCurrency(option.feeCurrency);
+                const sameSendAmount = Math.abs(option.sourceAmount - Number(sendAmount)) <= 1 / (2 * 10 ** getCurrency(sendCurrency).minorUnits);
+                return (
+                  <article key={option.id} className="rounded-xl border border-[var(--sr-line)] bg-white/80 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-[var(--sr-ink)]">Wise · {option.payIn} → {option.payOut}</p>
+                        <p className="mt-1 text-[11px] text-[var(--sr-ink)]/55">{formatMajor(option.sourceAmount, wiseQuote.sourceCurrency)} send · {formatMajor(option.targetAmount, wiseQuote.targetCurrency)} to recipient</p>
+                      </div>
+                      <button type="button" onClick={() => addWiseOptionToComparison(option)} disabled={!wiseQuoteMatchesCurrentInputs || !sameSendAmount} className="rounded-lg bg-[var(--sr-pine)] px-3 py-2 text-xs font-semibold text-white hover:bg-[var(--sr-pine)]/90 disabled:opacity-45">
+                        Add option to comparison
+                      </button>
+                    </div>
+                    <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs sm:grid-cols-4">
+                      <div><dt className="text-[var(--sr-ink)]/50">Wise rate</dt><dd className="font-semibold">1 {wiseQuote.sourceCurrency} = {option.rate} {wiseQuote.targetCurrency}</dd></div>
+                      <div><dt className="text-[var(--sr-ink)]/50">Wise fee summary</dt><dd className="font-semibold">{canShowFee ? formatMajor(option.feeAmount!, option.feeCurrency) : "Not provided"}</dd></div>
+                      <div><dt className="text-[var(--sr-ink)]/50">Total pricing</dt><dd className="font-semibold">{canShowPriceTotal ? formatMajor(option.priceTotal!, priceCurrency) : "Not provided"}</dd></div>
+                      <div><dt className="text-[var(--sr-ink)]/50">Estimated delivery</dt><dd className="font-semibold">{option.formattedEstimatedDelivery ?? (option.estimatedDelivery ? new Date(option.estimatedDelivery).toLocaleString() : "Not provided")}</dd></div>
+                    </dl>
+                    <p className="mt-3 text-[10px] leading-relaxed text-[var(--sr-ink)]/50">
+                      Checked {new Date(wiseQuote.checkedAt).toLocaleString()}. This display quote has no locked rate and no transfer ID. Recipient-bank or intermediary deductions may differ; confirm them before comparing or paying.
+                    </p>
+                    <a className="mt-1 inline-block text-[10px] font-medium text-[var(--sr-pine)] underline" href={wiseQuote.sourceUrl} target="_blank" rel="noreferrer">Wise quote documentation</a>
+                  </article>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="space-y-3">

@@ -40,6 +40,8 @@ Never commit `.env.local`; never put these in client code.
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Optional Anthropic/Claude provider. |
 | `STUDYRUNWAY_SESSION_STORE` | Session-store selector. `memory` is for local/dev only; production requires a supported shared adapter. The current build does not bundle a Firestore adapter and fails closed when production persistence is unavailable. |
 | `STUDYRUNWAY_DEMO_MODE` | Set `true` only for an explicitly labelled demo deployment that accepts process-local in-memory sessions. It is not a durability or identity guarantee. |
+| `WISE_QUOTES_ENABLED` | Set `true` only after confirming Wise Platform permits the app to show unauthenticated quote previews. Defaults to off. This adds indicative quotes only and never initiates a transfer. |
+| `WISE_QUOTES_ENV` | `production` for current indicative quotes or `sandbox` for non-live test quotes. Defaults to production, but the Wise quote endpoint remains disabled until the flag is enabled. |
 
 If `AI_PROVIDER` is set to a valid provider, StudyRunway uses only that provider; set it to `demo` to disable external model calls (as the browser tests do). It does not silently fall back to another configured provider. Without `AI_PROVIDER`, selection priority is xAI → Vertex AI → Gemini → OpenAI → Anthropic → demo mode. The header badge and `/api/agent/status` show the active provider honestly. The application does not silently fall back to another configured provider when `AI_PROVIDER` explicitly selects a provider that is missing required configuration.
 
@@ -53,6 +55,16 @@ If `AI_PROVIDER` is set to a valid provider, StudyRunway uses only that provider
 This uses the standard project-scoped Vertex AI OpenAI-compatible endpoint and Google Cloud Application Default Credentials. It does **not** use an AI Studio API key. Google documents the endpoint and authentication in [Vertex AI's OpenAI compatibility guide](https://cloud.google.com/vertex-ai/generative-ai/docs/start/openai). Keep credentials out of chat and source control.
 
 Official policy research uses Vertex's native `generateContent` endpoint with Google Search grounding, separate from the OpenAI-compatible chat endpoint. Enable Vertex AI API/billing and Google Search suggestions for the project. Set `VERTEX_AI_RESEARCH_MODEL` to a Gemini model that supports Search grounding. Research needs a destination country; tuition, instalment, and scholarship lookups also need the university or awarding body. Returned claims include direct source pages and a checked-at timestamp. A result is withheld unless every returned source passes the app's official-domain check (`.gov`, recognized `.edu`/`.ac` domains, or a domain you provide). Google Search suggestions are displayed as returned by Vertex. Grounded Search has separate [Google Search grounding](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search) and [Search suggestion display requirements](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-search-suggestions).
+
+### Wise Platform quote preview
+
+The transfer-comparison card can fetch a live indicative Wise quote when
+`WISE_QUOTES_ENABLED=true`. It uses Wise's unauthenticated display endpoint;
+the quote cannot create a transfer or lock a rate. Confirm Wise Platform's
+terms/partner access before enabling production quotes. For Cloud Run, set the
+two Wise environment variables on a new service revision as described in
+[Wise quote preview setup](WISE_QUOTES_SETUP.md). Partner-specific pricing
+and OAuth/mTLS credential handling are not implemented.
 
 ### Google AI Studio / Gemini setup
 
