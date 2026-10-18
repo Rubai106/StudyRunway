@@ -142,10 +142,13 @@ bottom are the ones we knowingly ship with.
 - **Request-size limits**: 256 KB on `/api/agent/chat` and
   `/api/agent/budget-apply`, 64 KB on `/api/agent/answer` and
   `/api/agent/budget-revert` (413 on oversize).
-- **Demo-grade per-IP rate limiting** on `/api/agent/chat`
-  (`src/lib/agent/rateLimit.ts`): 30 requests/minute per IP, 429 with
+- **Demo-grade rate limiting** on `/api/agent/chat`, `/api/agent/funding-analysis`,
+  and the Wise quote preview (`src/lib/agent/rateLimit.ts`): 30, 10, and 15
   `Retry-After`. In-memory and process-local — explicitly NOT production
-  rate limiting.
+  rate limiting. Proxy identity headers are ignored by default so callers
+  cannot rotate spoofed `X-Forwarded-For` values to bypass a bucket;
+  deployments behind a sanitizing proxy may opt in with
+  `STUDYRUNWAY_TRUST_PROXY_HEADERS=true`.
 - **Origin check** on state-changing `POST /api/agent/chat`, `DELETE
   /api/agent/chat`, `POST /api/agent/answer`, `POST
   /api/agent/budget-apply`, and `POST /api/agent/budget-revert`: when a
@@ -214,7 +217,13 @@ bottom are the ones we knowingly ship with.
    with real (sample) data; outputs are labelled but could be screenshotted
    out of context.
 6. **Rate limiting is demo-grade**: process-local, per-IP from proxy headers
-   (spoofable), no distributed enforcement. Do not rely on it in production.
+   only when `STUDYRUNWAY_TRUST_PROXY_HEADERS=true`; otherwise a conservative
+   shared fallback bucket is used. There is still no distributed enforcement.
+   Do not rely on it in production.
+
+7. **Dependency audit status is unresolved for this run.** Both `npm audit`
+   and `npm audit --omit=dev` failed at npm's registry audit endpoint before
+   returning advisory data. No dependency update or clearance claim is made.
 
 This assessment claims no production readiness and no certification. No
 payments, banking credentials, live transfer provider, or outbound email

@@ -23,7 +23,7 @@ import { runAgent, type AgentEvent } from "@/lib/agent/orchestrator";
 import { deleteSession, getTask } from "@/lib/agent/state";
 import { writeAuditEvent } from "@/lib/agent/audit";
 import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
-import { checkRateLimit, RATE_MAX_REQUESTS, RATE_WINDOW_MS } from "@/lib/agent/rateLimit";
+import { checkRateLimit, requestClientKey, RATE_MAX_REQUESTS, RATE_WINDOW_MS } from "@/lib/agent/rateLimit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,17 +34,6 @@ function encodeEvent(ev: AgentEvent): string {
   return `data: ${JSON.stringify(ev)}\n\n`;
 }
 
-function clientIp(req: Request): string {
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
-  return (
-    req.headers.get("x-real-ip") ??
-    req.headers.get("cf-connecting-ip") ??
-    "unknown"
-  );
-}
-
-
 export async function POST(req: Request): Promise<Response> {
   const persistenceError = sessionPersistenceResponse();
   if (persistenceError) return persistenceError;
@@ -53,7 +42,7 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: originError }, { status: 403 });
   }
   // Demo-grade rate limit: per-IP, fixed window.
-  const rl = checkRateLimit(`chat:${clientIp(req)}`);
+  const rl = checkRateLimit(`chat:${requestClientKey(req)}`);
   if (!rl.allowed) {
     return Response.json(
       {

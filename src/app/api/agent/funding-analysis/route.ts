@@ -1,6 +1,7 @@
 import { FundingFormRequestSchema } from "@/lib/fundingForm";
 import { formatFundingAnalysis, generateFundingAnalysis } from "@/lib/fundingAnalysis";
 import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
+import { checkRateLimit, requestClientKey, FUNDING_ANALYSIS_RATE_MAX_REQUESTS, RATE_WINDOW_MS } from "@/lib/agent/rateLimit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,6 +12,13 @@ export async function POST(req: Request): Promise<Response> {
   if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);
   if (originError) return Response.json({ ok: false, error: originError }, { status: 403 });
+  const rateLimit = checkRateLimit(`funding-analysis:${requestClientKey(req)}`, Date.now(), FUNDING_ANALYSIS_RATE_MAX_REQUESTS, RATE_WINDOW_MS);
+  if (!rateLimit.allowed) {
+    return Response.json(
+      { ok: false, error: "Too many funding-analysis requests. Wait a minute before trying again." },
+      { status: 429, headers: { "Retry-After": String(Math.max(1, Math.ceil(rateLimit.retryAfterMs / 1000))) } },
+    );
+  }
   const contentLength = Number(req.headers.get("content-length") ?? 0);
   if (contentLength > MAX_BODY_BYTES) return Response.json({ ok: false, error: "request body is too large" }, { status: 413 });
   let raw: unknown;

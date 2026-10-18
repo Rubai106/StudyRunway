@@ -8,6 +8,7 @@ import {
   resetRateLimit,
   RATE_MAX_REQUESTS,
   RATE_WINDOW_MS,
+  requestClientKey,
 } from "../rateLimit";
 
 describe("checkRateLimit", () => {
@@ -49,5 +50,19 @@ describe("checkRateLimit", () => {
     }
     resetRateLimit();
     expect(checkRateLimit("ip-c", RATE_MAX_REQUESTS).allowed).toBe(true);
+  });
+
+  it("does not let spoofed proxy headers create separate buckets by default", () => {
+    expect(requestClientKey(new Request("http://localhost", { headers: { "x-forwarded-for": "203.0.113.1" } })))
+      .toBe("untrusted-network");
+    expect(requestClientKey(new Request("http://localhost", { headers: { "x-forwarded-for": "203.0.113.2" } })))
+      .toBe("untrusted-network");
+  });
+
+  it("uses proxy identity only when explicitly trusted", () => {
+    process.env.STUDYRUNWAY_TRUST_PROXY_HEADERS = "true";
+    expect(requestClientKey(new Request("http://localhost", { headers: { "x-forwarded-for": "203.0.113.7" } })))
+      .toBe("203.0.113.7");
+    delete process.env.STUDYRUNWAY_TRUST_PROXY_HEADERS;
   });
 });

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { isSupportedCurrency } from "@/lib/currency";
 import { requestOriginError } from "@/lib/agent/session";
+import { checkRateLimit, requestClientKey, RATE_WINDOW_MS, WISE_RATE_MAX_REQUESTS } from "@/lib/agent/rateLimit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -10,8 +11,6 @@ const MAX_BODY_BYTES = 4 * 1024;
 const MAX_SOURCE_AMOUNT = 1_000_000;
 const API_VERSION = "2026Q4";
 const QUOTE_TIMEOUT_MS = 12_000;
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = 15;
 
 const WiseQuoteRequestSchema = z.object({
   sourceCurrency: z.string().trim().toUpperCase().length(3).refine(isSupportedCurrency),
@@ -20,38 +19,6 @@ const WiseQuoteRequestSchema = z.object({
 }).strict().refine((value) => value.sourceCurrency !== value.targetCurrency, {
   message: "Choose two different currencies.",
 });
-
-interface RateLimitEntry {
-  windowStartedAt: number;
-  count: number;
-}
-
-const rateLimits = new Map<string, RateLimitEntry>();
-
-function rateLimitKey(req: Request): string {
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return req.headers.get("x-real-ip")?.trim() || forwarded || "unknown";
-}
-
-function overRateLimit(req: Request): boolean {
-  const now = Date.now();
-  const key = rateLimitKey(req);
-  const current = rateLimits.get(key);
-  if (!current || now - current.windowStartedAt >= RATE_LIMIT_WINDOW_MS) {
-    rateLimits.set(key, { windowStartedAt: now, count: 1 });
-  } else if (current.count >= RATE_LIMIT_MAX) {
-    return true;
-  } else {
-    current.count += 1;
-  }
-
-  if (rateLimits.size > 1_000) {
-    for (const [entryKey, entry] of rateLimits) {
-      if (now - entry.windowStartedAt >= RATE_LIMIT_WINDOW_MS) rateLimits.delete(entryKey);
-    }
-  }
-  return false;
-}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -116,10 +83,11 @@ export async function POST(req: Request): Promise<Response> {
   if (originError) {
     return Response.json({ ok: false, error: originError }, { status: 403 });
   }
-  if (overRateLimit(req)) {
+  const rateLimit = checkRateLimit(`wise:${requestClientKey(req)}`, Date.now(), WISE_RATE_MAX_REQUESTS, RATE_WINDOW_MS);
+  if (!rateLimit.allowed) {
     return Response.json(
       { ok: false, error: "Too many Wise quote requests. Wait a minute before trying again." },
-      { status: 429, headers: { "Retry-After": "60", "Cache-Control": "no-store" } },
+      { status: 429, headers: { "Retry-After": String(Math.max(1, Math.ceil(rateLimit.retryAfterMs / 1000))), "Cache-Control": "no-store" } },
     );
   }
 
