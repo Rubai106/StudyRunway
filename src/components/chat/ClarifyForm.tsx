@@ -53,7 +53,13 @@ export default function ClarifyForm({
   onAnswered,
   submitAnswers = defaultSubmit,
 }: Props) {
-  const [values, setValues] = useState<AnswerValues>({});
+  const [values, setValues] = useState<AnswerValues>(() =>
+    Object.fromEntries(
+      (question.fields ?? [])
+        .filter((field) => field.defaultValue !== undefined)
+        .map((field) => [field.name, field.defaultValue ?? ""]),
+    ),
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);

@@ -40,6 +40,7 @@ export interface ClarifyQuestion {
     label: string;
     type: "text" | "number" | "date" | "select";
     options?: string[];
+    defaultValue?: string;
     required: boolean;
   }[];
 }

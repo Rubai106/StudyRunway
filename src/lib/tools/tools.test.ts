@@ -125,6 +125,30 @@ describe("analyze_funding_gap", () => {
     ]);
   });
 
+  it("interprets an unqualified dollar sign as USD and respects an explicit dollar currency", () => {
+    const input = extractFundingGapInputFromText(
+      "As of 2026-10-18. I have savings of $500 available 2026-10-18. " +
+      "My scholarship of $800 is expected 2026-11-05. Tuition of $1,200 is committed and due 2026-11-30.",
+    );
+
+    expect(input).not.toBeNull();
+    expect(input?.planningCurrency).toBe("USD");
+    expect(input?.fundingSources).toEqual([
+      expect.objectContaining({ amount: 500, currency: "USD", status: "confirmed_available" }),
+      expect.objectContaining({ amount: 800, currency: "USD", status: "confirmed_pending", expectedDate: "2026-11-05" }),
+    ]);
+    expect(input?.obligations).toEqual([
+      expect.objectContaining({ amount: 1200, currency: "USD", dueDate: "2026-11-30", kind: "tuition" }),
+    ]);
+
+    const explicitCad = extractFundingGapInputFromText(
+      "As of 2026-10-18. I have CAD $500 in savings available 2026-10-18. " +
+      "Tuition of $400 CAD is committed and due 2026-11-30.",
+    );
+    expect(explicitCad?.fundingSources[0]).toMatchObject({ amount: 500, currency: "CAD" });
+    expect(explicitCad?.obligations[0]).toMatchObject({ amount: 400, currency: "CAD" });
+  });
+
   it("builds a scenario baseline from dated facts while excluding explicitly listed recovery options", () => {
     const text =
       "As of 2026-10-17. I have confirmed savings of GBP 1,000 available 2026-10-17. " +

@@ -46,6 +46,7 @@ import { toJsonSchema } from "../providers/zodjson";
 import { HttpError } from "../providers/http";
 import type { Provider, ChatMessage, ToolSchema } from "../providers/types";
 import { CURRENCIES, isSupportedCurrency } from "../currency";
+import { extractExplicitMoneyMentions } from "../currencyText";
 import { toMinor } from "../money";
 import { listDestinations } from "../livingCosts";
 import {
@@ -127,6 +128,31 @@ function confirmedAnswersAsFinancialText(facts: TaskState["confirmedFacts"]): st
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
     const record = parsed as Record<string, unknown>;
+    if (fact.key === "tuition-timing-details") {
+      const formAmount = (key: string) => {
+        const value = record[key];
+        const amount = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+        return Number.isFinite(amount) && amount >= 0 ? amount : null;
+      };
+      const currency = typeof record.currency === "string" ? record.currency.trim().toUpperCase() : "";
+      if (!isSupportedCurrency(currency)) continue;
+      const tuitionAmount = formAmount("tuitionAmount");
+      const availableFunds = formAmount("availableFunds");
+      const scholarshipAmount = formAmount("scholarshipAmount");
+      const dueDate = typeof record.dueDate === "string" && ISO_DATE.safeParse(record.dueDate).success
+        ? record.dueDate
+        : "";
+      const scholarshipArrivalDate = typeof record.scholarshipArrivalDate === "string" &&
+        ISO_DATE.safeParse(record.scholarshipArrivalDate).success
+        ? record.scholarshipArrivalDate
+        : "";
+      if (availableFunds != null) statements.push(`${currency} ${availableFunds} available funds confirmed available`);
+      if (scholarshipAmount != null) {
+        statements.push(`${currency} ${scholarshipAmount} scholarship expected${scholarshipArrivalDate ? ` ${scholarshipArrivalDate}` : ""}`);
+      }
+      if (tuitionAmount != null && dueDate) statements.push(`${currency} ${tuitionAmount} tuition bill committed due ${dueDate}`);
+      continue;
+    }
     if (typeof record.question !== "string") continue;
     const question = record.question.toLowerCase();
     const answer = record.answer;
@@ -291,19 +317,15 @@ function explicitFinancialRequestText(state: TaskState, message: string): string
 }
 
 function explicitTransferComparisonArgs(text: string): Record<string, unknown> | null {
-  const codes = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
-  const moneyPattern = new RegExp(`(?<![A-Z0-9])(${codes})\\s*([0-9][0-9,]*(?:\\.\\d{1,3})?)(?![A-Z0-9])`, "gi");
-  const mentions = [...text.matchAll(moneyPattern)];
-  const sendAmount = mentions.find((match) => {
-    const start = match.index ?? 0;
-    const context = text.slice(Math.max(0, start - 60), Math.min(text.length, start + match[0].length + 50));
+  const mentions = extractExplicitMoneyMentions(text);
+  const sendAmount = mentions.find((mention) => {
+    const context = text.slice(Math.max(0, mention.start - 60), Math.min(text.length, mention.end + 50));
     return /\b(?:send|sending|transfer|transferring|remit|remittance|amount)\b/i.test(context);
   }) ?? (mentions.length === 1 ? mentions[0] : undefined);
   if (!sendAmount) return null;
 
-  const start = sendAmount.index ?? 0;
-  const fromCurrency = sendAmount[1].toUpperCase();
-  const after = text.slice(start + sendAmount[0].length);
+  const fromCurrency = sendAmount.currency;
+  const after = text.slice(sendAmount.end);
   const receiveMatch = after.match(/\b(?:to|into|receive(?:d)?)\s*([A-Z]{3})\b/i) ??
     text.match(/\b(?:to|into)\s*([A-Z]{3})\b/i);
   const toCurrency = receiveMatch?.[1]?.toUpperCase();
@@ -317,7 +339,7 @@ function explicitTransferComparisonArgs(text: string): Record<string, unknown> |
     : /\b(?:cheapest|lowest (?:total )?cost|minimi[sz]e (?:the )?(?:fee|cost)s?)\b/.test(lower)
       ? "min_total_cost"
       : "balanced";
-  const amount = Number(sendAmount[2].replaceAll(",", ""));
+  const amount = sendAmount.amount;
   if (!Number.isFinite(amount) || amount <= 0) return null;
   return {
     amountMinor: toMinor(amount, fromCurrency),
@@ -343,19 +365,17 @@ function explicitLivingCostInputs(text: string): Record<string, unknown> | null 
   }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score);
   if (!mentions.length || (mentions.length > 1 && mentions[0].score === mentions[1].score)) return null;
 
-  const codes = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
-  const moneyPattern = new RegExp(`(?<![A-Z0-9])(${codes})\\s*([0-9][0-9,]*(?:\\.\\d{1,3})?)(?![A-Z0-9])`, "gi");
-  const moneyMentions = [...text.matchAll(moneyPattern)];
+  const moneyMentions = extractExplicitMoneyMentions(text);
   const budgetMention = moneyMentions.find((match) => {
-    const start = match.index ?? 0;
+    const start = match.start;
     return /\b(?:monthly|month|budget|per month)\b/i.test(
-      text.slice(Math.max(0, start - 50), Math.min(text.length, start + match[0].length + 50)),
+      text.slice(Math.max(0, start - 50), Math.min(text.length, match.end + 50)),
     );
   }) ?? (moneyMentions.length === 1 ? moneyMentions[0] : undefined);
   if (!budgetMention) return null;
 
-  const budgetCurrency = budgetMention[1].toUpperCase();
-  const budgetAmount = Number(budgetMention[2].replaceAll(",", ""));
+  const budgetCurrency = budgetMention.currency;
+  const budgetAmount = budgetMention.amount;
   if (!Number.isFinite(budgetAmount) || budgetAmount < 0) return null;
   const inputs: Record<string, unknown> = {
     destinationId: mentions[0].destination.id,
@@ -411,13 +431,13 @@ function explicitScenarioRecoveryOptions(text: string, plan: NonNullable<TaskSta
       continue;
     }
 
-    const money = new RegExp(`\\b(${codes})\\s+${amountPattern}\\b`, "i").exec(segment);
+    const money = extractExplicitMoneyMentions(segment)[0];
     const arrival = segment.match(/\b(?:available|arriv\w*|expected(?:\s+on)?|by|on)\s+(\d{4}-\d{2}-\d{2})\b/i);
     if (!money || !arrival || !/\b(?:family|support|grant|loan|funding|backup|savings?)\b/i.test(segment)) continue;
-    const currency = money[1].toUpperCase();
-    const amount = Number(money[2].replaceAll(",", ""));
+    const currency = money.currency;
+    const amount = money.amount;
     if (!Number.isFinite(amount) || amount <= 0 || !ISO_DATE.safeParse(arrival[1]).success) continue;
-    const label = segment.slice(0, money.index).replace(/^[\s,:-]+|[\s,:-]+$/g, "").slice(0, 120) || "Additional funding";
+    const label = segment.slice(0, money.start).replace(/^[\s,:-]+|[\s,:-]+$/g, "").slice(0, 120) || "Additional funding";
     options.push({
       type: "additional_funding",
       label,
@@ -443,14 +463,13 @@ function explicitDelayScenario(text: string, plan: NonNullable<TaskState["workin
 }
 
 function explicitSafeToSendPatch(text: string): Record<string, unknown> | null {
-  const codes = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
-  const number = "([0-9][0-9,]*(?:\\.\\d{1,3})?)";
   const labelledMoney = (label: string) => {
-    const match = new RegExp(`\\b${label}\\b[^.;\\n]{0,70}?\\b(${codes})\\s*${number}\\b`, "i").exec(text);
-    if (!match) return null;
-    const major = Number(match[2].replaceAll(",", ""));
-    if (!Number.isFinite(major) || major < 0) return null;
-    return { currency: match[1].toUpperCase(), major, minor: toMinor(major, match[1]) };
+    const labelMatch = new RegExp(`\\b${label}\\b`, "i").exec(text);
+    if (!labelMatch || labelMatch.index === undefined) return null;
+    const segment = text.slice(labelMatch.index + labelMatch[0].length, labelMatch.index + labelMatch[0].length + 80);
+    const match = extractExplicitMoneyMentions(segment)[0];
+    if (!match || match.amount < 0) return null;
+    return { currency: match.currency, major: match.amount, minor: toMinor(match.amount, match.currency) };
   };
   const tuition = labelledMoney("tuition");
   const available = labelledMoney("available\\s+funds");
@@ -510,17 +529,23 @@ function explicitSafeToSendPatch(text: string): Record<string, unknown> | null {
 
   const quotePart = text.match(/user.entered\s+unverified\s+transfer\s+quote\s*:\s*([^.;\n]+(?:\.[^\n]+)?)/i)?.[1] ?? "";
   if (quotePart) {
-    const send = new RegExp(`\\bsend\\s+(${codes})\\s*${number}\\b`, "i").exec(quotePart);
-    const fee = new RegExp(`\\bfee\\s+(${codes})\\s*${number}\\b`, "i").exec(quotePart);
-    const receive = new RegExp(`\\breceive\\s+(${codes})\\s*${number}\\b`, "i").exec(quotePart);
+    const quoteMoney = (label: string) => {
+      const marker = new RegExp(`\\b${label}\\b`, "i").exec(quotePart);
+      if (!marker || marker.index === undefined) return undefined;
+      const afterLabel = quotePart.slice(marker.index + marker[0].length);
+      return extractExplicitMoneyMentions(afterLabel)[0];
+    };
+    const send = quoteMoney("send");
+    const fee = quoteMoney("fee");
+    const receive = quoteMoney("receive");
     const deliveryDate = quotePart.match(/\bby\s+(\d{4}-\d{2}-\d{2})\b/i)?.[1];
     if (send && fee && receive) {
-      const sendCurrency = send[1].toUpperCase();
-      const feeCurrency = fee[1].toUpperCase();
-      const targetCurrency = receive[1].toUpperCase();
-      const sendAmount = Number(send[2].replaceAll(",", ""));
-      const feeAmount = Number(fee[2].replaceAll(",", ""));
-      const receiveAmount = Number(receive[2].replaceAll(",", ""));
+      const sendCurrency = send.currency;
+      const feeCurrency = fee.currency;
+      const targetCurrency = receive.currency;
+      const sendAmount = send.amount;
+      const feeAmount = fee.amount;
+      const receiveAmount = receive.amount;
       if (
         Number.isFinite(sendAmount) && Number.isFinite(feeAmount) && Number.isFinite(receiveAmount) &&
         sendAmount > 0 && feeAmount >= 0 && receiveAmount >= 0
@@ -584,7 +609,7 @@ function explicitPolicyResearchArgs(text: string): Record<string, unknown> | nul
     "UK", "US",
   ];
   const escapedCountries = countryNames.map((country) => country.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const country = text.match(new RegExp(`\\b(?:in|country(?: is)?|destination(?: country)?)\\s+(${escapedCountries})\\b`, "i"))?.[1];
+  const country = text.match(new RegExp(`\\b(?:in|country(?: is)?|destination(?: country)?)\\s+(?:the\\s+)?(${escapedCountries})\\b`, "i"))?.[1];
   if (topic === "credit_building" && !country) return null;
   const request = text.slice(0, 350).replace(/\s+/g, " ").trim();
   return {
@@ -594,15 +619,29 @@ function explicitPolicyResearchArgs(text: string): Record<string, unknown> | nul
   };
 }
 
-function tuitionTimingFallbackQuestion(): ClarifyQuestion {
+function tuitionTimingFallbackQuestion(context = ""): ClarifyQuestion {
+  const supportedCodes = CURRENCIES.map(({ code }) => code).join("|");
+  const currencyMentions = new Set<string>();
+  const codedAmount = new RegExp(`\\b(${supportedCodes})\\s*\\$?\\s*\\d[\\d,]*(?:\\.\\d+)?|\\$\\s*\\d[\\d,]*(?:\\.\\d+)?\\s*(${supportedCodes})\\b`, "gi");
+  for (const match of context.matchAll(codedAmount)) {
+    const code = (match[1] ?? match[2])?.toUpperCase();
+    if (code) currencyMentions.add(code);
+  }
+  const dollarMentions = [...context.matchAll(/(?:US\$|\$)\s*\d[\d,]*(?:\.\d+)?/gi)];
+  const currencyDefault = currencyMentions.size === 1
+    ? [...currencyMentions][0]
+    : currencyMentions.size === 0 && dollarMentions.length > 0 ? "USD" : undefined;
+  const currencyLabel = currencyDefault
+    ? `Currency code (default ${currencyDefault}; change if needed)`
+    : "Currency code (for example USD, EUR, GBP, or BDT)";
   return {
     id: "tuition-timing-details",
     kind: "form",
     prompt:
-      "To check whether tuition can be paid on time, enter the tuition amount and due date, the funds already available, and the scholarship amount. Add the expected arrival date if you know it. Use the same currency for all amounts. This check covers the listed tuition and funding; include other bills due first in your plan.",
+      `To check whether tuition can be paid on time, enter the tuition amount and due date, the funds already available, and the scholarship amount. Add the expected arrival date if you know it. Use the same currency for all amounts.${currencyDefault ? ` I’ll use ${currencyDefault} for the amounts already marked with a dollar sign; change the currency field if needed.` : ""} This check covers the listed tuition and funding; include other bills due first in your plan.`,
     fields: [
       { name: "tuitionAmount", label: "Tuition amount", type: "number", required: true },
-      { name: "currency", label: "Currency code (for example USD, EUR, GBP, or BDT)", type: "text", required: true },
+      { name: "currency", label: currencyLabel, type: "text", ...(currencyDefault ? { defaultValue: currencyDefault } : {}), required: true },
       { name: "dueDate", label: "Tuition due date", type: "date", required: true },
       { name: "availableFunds", label: "Funds already available (excluding scholarship)", type: "number", required: true },
       { name: "scholarshipAmount", label: "Scholarship amount", type: "number", required: true },
@@ -835,6 +874,7 @@ How you work:
 - You NEVER invent financial figures. Every number you report must come from a tool result.
 - You may only call the tools listed for you. Never invent a tool name.
 - For tuition-payment safety decisions, use the Safe-to-Send tools to collect structured inputs, recalculate deterministic status, and request simulation only after explicit approval.
+- A dollar sign ($) without a more specific currency code means USD; state “assuming USD” and do not ask what $ means. If the user writes USD, CAD, AUD, or SGD alongside $, that explicit code overrides the USD default. Ask only when the currency is genuinely missing or conflicting.
 - When calling analyze_funding_gap, use its compact fields: planningCurrency, fundingSources [{label, amount, currency, status, availableDate?, expectedDate?, kind?}], obligations [{label, amount, currency, dueDate, status, kind?}], and fxRates only if an exchange rate was explicitly supplied. Amounts are major currency units (e.g. 5000 USD), not cents. Omit optional dates only when the user did not provide them. Use only user-stated facts or the current structured plan; never guess an amount, date, status, or FX rate. If a required fact is missing or ambiguous, ask the user instead of calling the tool.
 - Values extracted from uploaded documents are candidates, not confirmed facts. Show their page/source evidence and wait for the user to confirm each value before using it in a financial calculation. A document's presence or extracted tool output is never confirmation.
 - Keep answers short, plain, and verdict-first. No jargon.
@@ -1352,6 +1392,25 @@ async function* runModelFlow(
             "I couldn't safely map the request to dated funding and bill records. Please state each amount with its 3-letter currency, whether funding is available or expected, and each bill's due date in YYYY-MM-DD format. I will not fill in missing amounts, dates, or exchange rates.",
           );
         }
+      } else if (tool.name === "build_action_plan") {
+        const requestText = explicitFinancialRequestText(state, message);
+        const groundedInput = extractScenarioFundingGapInputFromText(requestText);
+        const plan = state.workingPlan ?? (groundedInput ? fundingGapInputToToolPlan(groundedInput) : null);
+        if (!plan) {
+          throw new ArgsValidationError(
+            tool.name,
+            "I need a complete, user-confirmed financial plan before I can build prioritized actions.",
+          );
+        }
+        const suppliedArgs = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
+          ? rawArgs as Record<string, unknown>
+          : {};
+        const priorGap = [...toolResults].reverse().find((item) => item.tool === "analyze_funding_gap" && item.result.ok);
+        effectiveArgs = {
+          ...suppliedArgs,
+          plan,
+          ...(priorGap ? { gapSummary: priorGap.result.summary } : {}),
+        };
       } else if (tool.name === "compare_transfers") {
         const groundedArgs = explicitTransferComparisonArgs(explicitFinancialRequestText(state, message));
         if (groundedArgs) effectiveArgs = groundedArgs;
@@ -1519,7 +1578,7 @@ async function* runModelFlow(
       !isAttachedDocumentEvidence(message) &&
       !extractFundingGapInputFromText(tuitionRequestContext)
     ) {
-      const questions = [tuitionTimingFallbackQuestion()];
+      const questions = [tuitionTimingFallbackQuestion(tuitionRequestContext)];
       state = updateTask(sessionId, {
         status: "clarifying",
         userGoal: "Check whether the listed tuition can be covered by available funds and the scholarship arrival date.",
@@ -1556,7 +1615,7 @@ async function* runModelFlow(
           extractFundingGapInputFromText([state.originalRequest, message].filter(Boolean).join("\n")),
         );
         const questions =
-          hasStructuredPlan || hasGroundedTextInputs ? [] : [tuitionTimingFallbackQuestion()];
+          hasStructuredPlan || hasGroundedTextInputs ? [] : [tuitionTimingFallbackQuestion([state.originalRequest, message].filter(Boolean).join("\n"))];
         understanding = {
           scope: "student_finance",
           summary: "Check whether the listed tuition can be covered by available funds and the scholarship arrival date.",

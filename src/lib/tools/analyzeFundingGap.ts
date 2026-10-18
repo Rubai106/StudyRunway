@@ -14,6 +14,7 @@ import { CURRENCIES, formatMinor } from "../currency";
 import { buildForecast, gapRoles, GapRole } from "../forecast";
 import { formatDateLong, ISO_DATE, todayISO } from "../model";
 import { toMajor, toMinor } from "../money";
+import { extractExplicitMoneyMentions } from "../currencyText";
 import {
   currencyCodeSchema,
   ToolPlanSchema,
@@ -77,10 +78,6 @@ interface DatedMention {
 
 const ISO_DATE_PATTERN = /\b\d{4}-\d{2}-\d{2}\b/g;
 const CURRENCY_PATTERN = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
-const MONEY_PATTERN = new RegExp(
-  `(?<![A-Z0-9-])(?:(?<before>${CURRENCY_PATTERN})\\s*)?(?<amount>(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,3})?)(?:\\s*(?<after>${CURRENCY_PATTERN}))?(?![A-Z0-9-])`,
-  "gi",
-);
 const FUNDING_TERMS = /\b(?:savings?|cash|funds?|scholarships?|grants?|loans?|income|available|received|have)\b/gi;
 const OBLIGATION_TERMS = /\b(?:tuition|fees?|bill|invoice|rent|deposit|living|travel|visa|insurance|payment|expense|cost|due|payable)\b/gi;
 
@@ -92,19 +89,7 @@ function explicitMoneyMentions(text: string): MoneyMention[] {
     (rate) => " ".repeat(rate.length),
   );
   const withoutDates = withoutRates.replace(ISO_DATE_PATTERN, (date) => " ".repeat(date.length));
-  const mentions: MoneyMention[] = [];
-  for (const match of withoutDates.matchAll(MONEY_PATTERN)) {
-    const groups = match.groups;
-    const before = groups?.before?.toUpperCase();
-    const after = groups?.after?.toUpperCase();
-    if (!before && !after) continue; // bare numbers have no grounded currency
-    if (before && after && before !== after) continue;
-    const amount = Number(groups?.amount?.replaceAll(",", ""));
-    if (!Number.isFinite(amount)) continue;
-    const start = match.index ?? 0;
-    mentions.push({ amount, currency: before ?? after!, start, end: start + match[0].length });
-  }
-  return mentions;
+  return extractExplicitMoneyMentions(withoutDates);
 }
 
 function explicitExchangeRates(text: string): Record<string, number> {

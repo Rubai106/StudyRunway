@@ -40,6 +40,7 @@ export const ClarifyQuestionSchema = z.object({
         label: z.string().min(1).max(120),
         type: z.enum(["text", "number", "date", "select"]),
         options: z.array(z.string().max(120)).max(40).optional(),
+        defaultValue: z.string().max(120).optional(),
         required: z.boolean(),
       })
     )

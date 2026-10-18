@@ -25,6 +25,8 @@ import { extractDocumentTool } from "../../tools/extractDocument";
 import { simulateScenarioTool } from "../../tools/simulateScenario";
 import { draftEmailTool } from "../../tools/draftEmail";
 import { compareTransfersTool } from "../../tools/compareTransfers";
+import { analyzeFundingGapTool } from "../../tools/analyzeFundingGap";
+import { buildActionPlanTool } from "../../tools/buildActionPlan";
 import { upsertSafeToSendDraftTool } from "../../tools/safeToSend";
 import { buildLivingCostPlan, getDestination } from "../../livingCosts";
 import { HttpError } from "../../providers/http";
@@ -217,6 +219,28 @@ describe("model-driven loop", () => {
     expect(provider.chat).not.toHaveBeenCalled();
   });
 
+  it("defaults the tuition clarification currency to USD when the request uses $", async () => {
+    const provider: Provider = {
+      name: "vertex",
+      chat: vi.fn().mockRejectedValue(new Error("provider request timed out after 45000ms")),
+    };
+    const message = "I have $500 available. My scholarship may arrive late. Can I still pay tuition on time?";
+    const events = await collect(runAgent({
+      sessionId: "s-tuition-dollar-default",
+      message,
+      tools: [PING_TOOL],
+      provider,
+    }));
+    const clarification = events.find((event) => event.type === "clarify");
+    expect(clarification?.type).toBe("clarify");
+    if (clarification?.type === "clarify") {
+      const currency = clarification.questions[0]?.fields?.find((field) => field.name === "currency");
+      expect(currency).toMatchObject({ defaultValue: "USD", required: true });
+      expect(clarification.questions[0]?.prompt).toContain("I’ll use USD");
+    }
+    expect(provider.chat).not.toHaveBeenCalled();
+  });
+
   it("does not misroute a university email draft to the tuition timing form", async () => {
     const provider = new ScriptedProvider([
       json(UNDERSTANDING),
@@ -315,7 +339,7 @@ describe("model-driven loop", () => {
     ]);
     const events = await collect(runAgent({
       sessionId: "s-budget-grounded-inputs",
-      message: "I am an international student planning to study in Limerick, Ireland. My monthly living budget is EUR 900. Build a realistic sourced monthly budget, compare typical costs against my budget, and keep tuition separate.",
+      message: "I am an international student planning to study in Limerick, Ireland. My monthly living budget is $900. Build a realistic sourced monthly budget, compare typical costs against my budget, and keep tuition separate.",
       tools: [PING_TOOL, buildLivingCostPlanTool],
       provider,
       toolTimeoutMs: 5000,
@@ -326,11 +350,19 @@ describe("model-driven loop", () => {
     const result = events.find((event) => event.type === "result");
     expect(result).toMatchObject({ component: "living_cost_plan" });
     if (result?.type === "result") {
-      expect(result.data["inputs"]).toMatchObject({ destinationId: "ie-limerick", monthlyBudgetMinor: 90000, budgetCurrency: "EUR", insuranceCovered: false });
+      expect(result.data["inputs"]).toMatchObject({ destinationId: "ie-limerick", monthlyBudgetMinor: 90000, budgetCurrency: "USD", insuranceCovered: false });
     }
   });
 
   it("normalizes explicit corridor, amount, deadline, and ranking objective before comparing transfers", async () => {
+    let normalizedArgs: Record<string, unknown> | undefined;
+    const captureTransferTool = {
+      ...compareTransfersTool,
+      handler: async (args: Record<string, unknown>, context: Parameters<typeof compareTransfersTool.handler>[1]) => {
+        normalizedArgs = args;
+        return compareTransfersTool.handler(args, context);
+      },
+    };
     const provider = new ScriptedProvider([
       json(UNDERSTANDING),
       json(PLAN),
@@ -340,8 +372,8 @@ describe("model-driven loop", () => {
     ]);
     const events = await collect(runAgent({
       sessionId: "s-transfer-grounded-inputs",
-      message: "Compare reference options for sending BDT 1,200,000 to GBP by 2026-10-20. Prioritize options that arrive before the deadline and show fees and amount received.",
-      tools: [PING_TOOL, compareTransfersTool],
+      message: "Compare reference options for sending $1,200 to GBP by 2026-10-20. Prioritize options that arrive before the deadline and show fees and amount received.",
+      tools: [PING_TOOL, captureTransferTool],
       provider,
       toolTimeoutMs: 5000,
     }));
@@ -351,12 +383,11 @@ describe("model-driven loop", () => {
     const result = events.find((event) => event.type === "result");
     expect(result).toMatchObject({ component: "transfer_comparison" });
     if (result?.type === "result") {
-      expect(result.data["corridor"]).toBe("BDT>GBP");
-      expect(result.data["requestedAmount"]).toContain("1,200,000");
-      expect(result.data["requestedDeadline"]).toBe("2026-10-20");
+      expect(result.data["corridor"]).toBe("USD>GBP");
       expect(result.data["objective"]).toBe("balanced");
       expect(result.data["figureLabel"]).toContain("not a live quote");
     }
+    expect(normalizedArgs).toMatchObject({ fromCurrency: "USD", toCurrency: "GBP", amountMinor: 120000, deadlineIso: "2026-10-20", objective: "balanced" });
   });
 
   it("preserves stated Safe-to-Send facts and leaves unknown approval facts missing", async () => {
@@ -437,6 +468,29 @@ describe("model-driven loop", () => {
     expect(events.some((event) => event.type === "clarify")).toBe(false);
     expect(events.some((event) => event.type === "assistant_text" && event.text.includes("timed out during request classification"))).toBe(true);
     expect(getTask("s-grounded-timeout")?.status).toBe("done");
+  });
+
+  it("supplies a grounded plan when the model requests an action plan without passing plan arguments", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "gap", name: "analyze_funding_gap", args: {} }]),
+      toolTurn([{ id: "actions", name: "build_action_plan", args: {} }]),
+      textOnly("No more tools are needed."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-grounded-action-plan",
+      message:
+        "As of 2026-10-18. I have savings of USD 500 available 2026-10-18. " +
+        "Tuition of USD 1,200 is committed and due 2026-10-30. Can I still pay tuition on time?",
+      tools: [PING_TOOL, analyzeFundingGapTool, buildActionPlanTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(events.find((event) => event.type === "tool_call_end" && event.tool === "build_action_plan")).toMatchObject({ ok: true });
+    expect(events.some((event) => event.type === "tool_call_end" && event.tool === "build_action_plan" && !event.ok)).toBe(false);
   });
 
   it("runs understand → plan → tools → verify → outcome with exact event shapes", async () => {
@@ -624,6 +678,35 @@ describe("model-driven loop", () => {
       verified: null,
       verifyNote: expect.stringContaining("live data"),
     });
+  });
+
+  it("extracts a country phrased as 'in the United States' for official policy research", async () => {
+    let researchedArgs: Record<string, unknown> | undefined;
+    const researchTool: ToolDefinition = {
+      name: "research_policy",
+      description: "Looks up official student-finance rules.",
+      parameters: z.object({ query: z.string(), topic: z.string(), country: z.string() }),
+      requiresApproval: false,
+      handler: async (args) => {
+        researchedArgs = args;
+        return { ok: true, summary: "Official policy source checked." };
+      },
+    };
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "policy", name: "research_policy", args: { query: "proof of funds", topic: "general", country: "" } }]),
+      textOnly("No further research needed."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-policy-country-article",
+      message: "Find the official proof of funds rules for international students in the United States.",
+      tools: [PING_TOOL, researchTool],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(researchedArgs).toMatchObject({ topic: "proof_of_funds", country: "United States" });
   });
 
   it("retries once on transient failure", async () => {
