@@ -114,7 +114,7 @@ describe("feature completion regressions", () => {
       model: "gemini-2.5-flash",
       fetchJson: async (_url, options) => {
         expect(options.timeoutMs).toBe(RESEARCH_POLICY_REQUEST_TIMEOUT_MS);
-        expect((options.body as { generationConfig: { temperature: number } }).generationConfig.temperature).toBe(0);
+        expect((options.body as { generationConfig: { temperature: number } }).generationConfig.temperature).toBe(1.0);
         return response;
       },
     });

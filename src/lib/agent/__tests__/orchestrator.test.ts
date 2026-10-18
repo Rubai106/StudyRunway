@@ -31,7 +31,7 @@ import { buildActionPlanTool } from "../../tools/buildActionPlan";
 import { loadSafeToSendScenarioTool, upsertSafeToSendDraftTool } from "../../tools/safeToSend";
 import { buildLivingCostPlan, getDestination } from "../../livingCosts";
 import { HttpError } from "../../providers/http";
-import type { Provider, ChatResult, ChatMessage, ToolSchema } from "../../providers/types";
+import type { Provider, ChatResult, ChatMessage, ChatOptions, ToolSchema } from "../../providers/types";
 import type { ToolDefinition, ToolResult } from "../tools";
 
 beforeEach(() => {
@@ -41,12 +41,14 @@ beforeEach(() => {
 
 /** Scripted stand-in for a real model provider. */
 class ScriptedProvider implements Provider {
-  name = "xai" as const;
-  calls: { messages: ChatMessage[]; tools: ToolSchema[] }[] = [];
+  name: Provider["name"];
+  calls: { messages: ChatMessage[]; tools: ToolSchema[]; options?: ChatOptions }[] = [];
   snapshots: { messages: ChatMessage[]; tools: ToolSchema[] }[] = [];
-  constructor(private queue: ChatResult[]) {}
-  async chat(messages: ChatMessage[], tools: ToolSchema[]): Promise<ChatResult> {
-    this.calls.push({ messages, tools });
+  constructor(private queue: ChatResult[], name: Provider["name"] = "xai") {
+    this.name = name;
+  }
+  async chat(messages: ChatMessage[], tools: ToolSchema[], options?: ChatOptions): Promise<ChatResult> {
+    this.calls.push({ messages, tools, options });
     this.snapshots.push({
       messages: messages.map((message) => ({
         ...message,
@@ -179,6 +181,50 @@ describe("model-driven loop", () => {
     expect(questions.length).toBeGreaterThan(0);
     expect(questions[0]?.options).toContain("BDT");
     expect(questions[0]?.options).toContain("EUR");
+  });
+
+  it("uses schema-constrained output for Vertex understanding requests", async () => {
+    const provider = new ScriptedProvider([
+      json({
+        ...UNDERSTANDING,
+        questions: [{ id: "q-home-currency", kind: "currency", prompt: "What is your home currency?" }],
+      }),
+    ], "vertex");
+    await collect(runAgent({
+      sessionId: "s-vertex-structured-output",
+      message: "help me plan my study funding",
+      tools: [PING_TOOL],
+      provider,
+    }));
+
+    expect(provider.calls[0]?.options?.responseFormat).toMatchObject({
+      type: "json_schema",
+      name: "student_finance_agent_response",
+      schema: { type: "object", properties: expect.any(Object) },
+    });
+  });
+
+  it("gives Vertex schema-validation paths on its single JSON repair attempt", async () => {
+    const provider = new ScriptedProvider([
+      json({ ...UNDERSTANDING, currencies: ["TOO-LONG-CURRENCY"] }),
+      json({
+        ...UNDERSTANDING,
+        questions: [{ id: "q-home-currency", kind: "currency", prompt: "What is your home currency?" }],
+      }),
+    ], "vertex");
+
+    const events = await collect(runAgent({
+      sessionId: "s-vertex-schema-repair",
+      message: "help me plan my study funding",
+      tools: [PING_TOOL],
+      provider,
+    }));
+
+    expect(events.some((event) => event.type === "clarify")).toBe(true);
+    expect(provider.calls).toHaveLength(2);
+    const repairPrompt = provider.calls[1]?.messages.at(-1)?.content ?? "";
+    expect(repairPrompt).toContain("currencies.0 (too_big)");
+    expect(repairPrompt).not.toContain("TOO-LONG-CURRENCY");
   });
 
   it("asks for missing tuition timing figures before calling the provider", async () => {

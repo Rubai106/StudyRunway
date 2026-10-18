@@ -157,6 +157,14 @@ export function createVertexProvider(
       };
       if (options?.responseFormat === "json_object") {
         body.response_format = { type: "json_object" };
+      } else if (options?.responseFormat?.type === "json_schema") {
+        body.response_format = {
+          type: "json_schema",
+          json_schema: {
+            name: options.responseFormat.name,
+            schema: options.responseFormat.schema,
+          },
+        };
       }
       if (tools.length > 0) {
         body.tools = tools.map((tool) => ({

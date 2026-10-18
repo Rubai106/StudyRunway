@@ -33,8 +33,13 @@ interface Props {
 }
 
 export default function ResultCard({ component, data, onFollowUpMessage, sessionId }: Props) {
-  const title = component === "policy_research" && data["topic"] === "credit_building"
-    ? "Credit-building guide · official sources"
+  const policyTitles: Record<string, string> = {
+    credit_building: "Credit-building guide · official sources",
+    banking_setup: "Banking setup · official sources",
+    arrival_costs: "Arrival cost guide · official sources",
+  };
+  const title = component === "policy_research" && typeof data["topic"] === "string" && policyTitles[data["topic"]]
+    ? policyTitles[data["topic"]]
     : TITLES[component] ?? asString(data["title"], "Result");
   let body: React.ReactNode;
   switch (component) {

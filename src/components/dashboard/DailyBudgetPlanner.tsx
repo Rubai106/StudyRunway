@@ -52,7 +52,13 @@ function sortedExpenses(expenses: DailyExpense[]): DailyExpense[] {
   return [...expenses].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export default function DailyBudgetPlanner() {
+export default function DailyBudgetPlanner({
+  onAsk,
+  disabled = false,
+}: {
+  onAsk: (prompt: string) => void;
+  disabled?: boolean;
+}) {
   const [budget, setBudget] = useState<DailyBudgetState>(emptyDailyBudget);
   const [loaded, setLoaded] = useState(false);
   const [today, setToday] = useState("");
@@ -65,6 +71,7 @@ export default function DailyBudgetPlanner() {
   const [note, setNote] = useState("");
   const [formError, setFormError] = useState("");
   const [storageError, setStorageError] = useState(false);
+  const [completeWeekConfirmed, setCompleteWeekConfirmed] = useState(false);
   const currentDayRef = useRef("");
 
   useEffect(() => {
@@ -78,6 +85,7 @@ export default function DailyBudgetPlanner() {
         ? String(toMajor(current.dailyLimitMinor, current.currency))
         : "");
       setExpenseCurrency(current.currency ?? "");
+      setCompleteWeekConfirmed(false);
       setToday(date);
       setSelectedDate((previous) => previous || date);
       setLoaded(true);
@@ -121,6 +129,19 @@ export default function DailyBudgetPlanner() {
     date,
     amountMinor: sumMinor(budget.expenses.filter((expense) => expense.date === date && expense.currency === trackingCurrency)),
   }));
+  const weeklySpendMinor = weeklyTotals.reduce((total, day) => total + day.amountMinor, 0);
+  const monthlyPaceMinor = Number.isSafeInteger(weeklySpendMinor)
+    && Number.isSafeInteger(Math.round(weeklySpendMinor * 30 / 7))
+    ? Math.round(weeklySpendMinor * 30 / 7)
+    : null;
+  const weeklyCategoryTotals = DAILY_EXPENSE_CATEGORIES
+    .map((name) => ({
+      name,
+      amountMinor: sumMinor(budget.expenses.filter((expense) => weekDates.includes(expense.date)
+        && expense.currency === trackingCurrency && expense.category === name)),
+    }))
+    .filter((item) => item.amountMinor > 0)
+    .sort((a, b) => b.amountMinor - a.amountMinor);
   const largestDay = Math.max(1, ...weeklyTotals.map((day) => day.amountMinor));
   const categoryTotals = DAILY_EXPENSE_CATEGORIES
     .map((name) => ({
@@ -133,6 +154,7 @@ export default function DailyBudgetPlanner() {
 
   const persist = (next: DailyBudgetState) => {
     setBudget(next);
+    setCompleteWeekConfirmed(false);
     setStorageError(!saveDailyBudget(next));
   };
 
@@ -221,7 +243,7 @@ export default function DailyBudgetPlanner() {
               type="date"
               value={selectedDate}
               max={today || undefined}
-              onChange={(event) => { setSelectedDate(event.target.value); setFormError(""); }}
+              onChange={(event) => { setSelectedDate(event.target.value); setCompleteWeekConfirmed(false); setFormError(""); }}
               disabled={!loaded}
               className="rounded-lg border border-[var(--sr-line)] bg-white px-2.5 py-2 text-xs font-medium text-[var(--sr-ink)]"
             />
@@ -431,6 +453,33 @@ export default function DailyBudgetPlanner() {
               </ul>
             </div>
           )}
+          <div className="mt-4 border-t border-[var(--sr-line)] pt-3">
+            <p className="text-[11px] font-semibold text-[var(--sr-ink)]/75">Protect tuition in your spending plan</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-[var(--sr-ink)]/55">
+              {trackingCurrency && monthlyPaceMinor !== null
+                ? `Recorded seven-day spend: ${formatMinorMoney(weeklySpendMinor, trackingCurrency)}. A simple 30-day pace would be ${formatMinorMoney(monthlyPaceMinor, trackingCurrency)} only if all spending for all seven days was logged; it is not a forecast.`
+                : "Compare a recent spending pace with tuition and upcoming essential bills in your funding plan."}
+            </p>
+            <label className="mt-2 flex items-start gap-2 text-[10px] leading-relaxed text-[var(--sr-ink)]/60">
+              <input type="checkbox" checked={completeWeekConfirmed} onChange={(event) => setCompleteWeekConfirmed(event.target.checked)} className="mt-0.5 accent-[var(--sr-pine)]" />
+              <span>I logged all spending for the seven days ending {selectedDate || "the selected date"}.</span>
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                const categories = weeklyCategoryTotals.map((item) => `${item.name}: ${formatMinorMoney(item.amountMinor, trackingCurrency)}`).join("; ");
+                const spend = trackingCurrency && monthlyPaceMinor !== null
+                  ? `For the 7 calendar days ending ${selectedDate}, my logged spending total was ${formatMinorMoney(weeklySpendMinor, trackingCurrency)} in ${trackingCurrency}${categories ? ` (categories: ${categories})` : ""}. A simple 30-day pace calculated as 7-day total × 30 / 7 is ${formatMinorMoney(monthlyPaceMinor, trackingCurrency)}; label this only as an estimate, not a forecast.`
+                  : "I have no usable seven-day spending summary selected. Ask me for the period, currency, and recent spending details you need.";
+                onAsk(`Check whether my recent spending pace leaves tuition on track. I confirm that I logged all spending for the seven calendar days ending ${selectedDate}. ${spend} Compare it with my latest confirmed tuition/funding plan and upcoming essential bills only if the currency and dates match. Keep different currencies separate, do not convert without my dated FX assumption, do not alter my baseline, and do not assume essential spending can be cut. Identify missing information before drawing a conclusion.`);
+              }}
+              disabled={disabled || !trackingCurrency || !selectedDate || !completeWeekConfirmed || monthlyPaceMinor === null}
+              className="mt-2 rounded-lg border border-[var(--sr-line)] bg-white px-3 py-2 text-left text-xs font-semibold text-[var(--sr-pine)] hover:bg-[var(--sr-mist)] disabled:opacity-50"
+            >
+              Compare my spending pace with tuition
+            </button>
+            <p className="mt-1 text-[10px] text-[var(--sr-ink)]/45">Only a currency total and category totals are shared when you click; purchase notes are not included.</p>
+          </div>
         </div>
 
         {otherCurrencyEntries > 0 && (
@@ -447,7 +496,7 @@ export default function DailyBudgetPlanner() {
         )}
       </div>
       <div className="border-t border-[var(--sr-line)]/80 px-5 py-3 text-[10px] leading-relaxed text-[var(--sr-ink)]/50 sm:px-7">
-        Private to this browser profile. Entries are not synced across devices or sent to the AI agent. You can remove an entry with its delete button.
+        Private to this browser profile. Entries are not synced. Only a summarized seven-day total and category totals are sent if you confirm the week is complete and choose the tuition comparison above; purchase notes are not sent.
       </div>
     </section>
   );

@@ -37,9 +37,15 @@ export interface ToolSchema {
   parameters: Record<string, unknown>;
 }
 
+export type JsonSchemaResponseFormat = {
+  type: "json_schema";
+  name: string;
+  schema: Record<string, unknown>;
+};
+
 export interface ChatOptions {
   /** Ask compatible providers for a syntactically valid JSON object. */
-  responseFormat?: "json_object";
+  responseFormat?: "json_object" | JsonSchemaResponseFormat;
 }
 
 /** What a provider returns for one chat turn. */

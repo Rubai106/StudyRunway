@@ -25,7 +25,7 @@ import {
 } from "./analyzeFundingGap";
 import { extractDocumentTool } from "./extractDocument";
 import { simulateScenarioTool } from "./simulateScenario";
-import { researchPolicyTool } from "./researchPolicy";
+import { researchPolicyTool, ResearchPolicyParams, runGroundedPolicyResearch } from "./researchPolicy";
 import { buildActionPlanTool } from "./buildActionPlan";
 import { draftEmailTool } from "./draftEmail";
 import type { ToolContext } from "./types";
@@ -147,6 +147,37 @@ describe("analyze_funding_gap", () => {
     );
     expect(explicitCad?.fundingSources[0]).toMatchObject({ amount: 500, currency: "CAD" });
     expect(explicitCad?.obligations[0]).toMatchObject({ amount: 400, currency: "CAD" });
+  });
+
+  it("resolves relative deadlines and recognizes wages due as incoming funding", async () => {
+    const input = extractFundingGapInputFromText(
+      "As of 2026-10-18. I have €3,200 available. A €1,000 scholarship is expected in 3 weeks, " +
+      "and €700 wages are due in 7 days. Tuition of €5,000 is due in 10 days.",
+    );
+
+    expect(input).not.toBeNull();
+    if (!input) throw new Error("Expected the dated EUR funding details to parse");
+    expect(input).toMatchObject({
+      asOfDate: "2026-10-18",
+      planningCurrency: "EUR",
+      fundingSources: [
+        { amount: 3200, currency: "EUR", status: "confirmed_available" },
+        { amount: 1000, currency: "EUR", status: "confirmed_pending", expectedDate: "2026-11-08", kind: "scholarship" },
+        { amount: 700, currency: "EUR", status: "confirmed_pending", expectedDate: "2026-10-25", kind: "income" },
+      ],
+      obligations: [
+        { amount: 5000, currency: "EUR", dueDate: "2026-10-28", status: "committed", kind: "tuition" },
+      ],
+    });
+
+    const result = await analyzeFundingGapTool.handler(input, CTX);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      asOfDate: "2026-10-18",
+      hasGap: true,
+      gapDate: "2026-10-28",
+      shortfallMinor: 110_000,
+    });
   });
 
   it("builds a scenario baseline from dated facts while excluding explicitly listed recovery options", () => {
@@ -415,6 +446,28 @@ describe("simulate_scenario", () => {
 });
 
 describe("research_policy", () => {
+  it("uses Google's recommended temperature for grounded search requests", async () => {
+    let requestBody: Record<string, unknown> = {};
+    const input = ResearchPolicyParams.parse({
+      query: "current proof of funds",
+      topic: "proof_of_funds",
+      country: "Australia",
+    });
+
+    await runGroundedPolicyResearch(input, {
+      projectId: "test-project-12345",
+      location: "global",
+      tokenSource: async () => "test-token",
+      fetchJson: async (_url, options) => {
+        requestBody = options.body as Record<string, unknown>;
+        return {};
+      },
+    });
+
+    expect(requestBody.generationConfig).toMatchObject({ temperature: 1.0 });
+    expect(requestBody.tools).toEqual([{ googleSearch: {} }]);
+  });
+
   it("asks for location context before searching and never fabricates a citation", async () => {
     for (const query of [
       "What is the tuition refund deadline for international students?",

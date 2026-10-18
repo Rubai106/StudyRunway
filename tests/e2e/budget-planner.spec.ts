@@ -77,8 +77,9 @@ function expectNoConsoleErrors(errors: string[]) {
 /** Click the welcome-screen demo button and wait for the budget card. */
 async function runSampleDemo(page: Page) {
   await page.goto("/");
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
   await page
-    .getByRole("button", { name: "Try sample budget", exact: true })
+    .getByRole("button", { name: /Try the sample student budget/ })
     .click();
   const verdict = page.getByText(
     "Shortfall — typical costs are above your budget",
@@ -422,16 +423,16 @@ test.describe("destination budget planner", () => {
     expectNoConsoleErrors(errors);
   });
 
-  test("dashboard sample budget button is keyboard-operable", async ({
+  test("chat sample budget button is keyboard-operable", async ({
     page,
   }) => {
     const errors = watchConsole(page);
     await page.goto("/");
+    await page.getByRole("button", { name: "Chat", exact: true }).click();
     const demo = page.getByRole("button", {
-      name: "Try sample budget",
+      name: /Try the sample student budget/,
     });
-    // Dashboard actions are disabled until the session-status restoration
-    // request completes, so wait until the control is keyboard-available.
+    // Chat welcome actions are disabled until session restoration completes.
     await expect(demo).toBeEnabled({ timeout: 15_000 });
     await demo.focus();
     await expect(demo).toBeFocused();

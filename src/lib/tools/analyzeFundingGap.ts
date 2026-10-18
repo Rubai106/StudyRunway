@@ -78,7 +78,7 @@ interface DatedMention {
 
 const ISO_DATE_PATTERN = /\b\d{4}-\d{2}-\d{2}\b/g;
 const CURRENCY_PATTERN = CURRENCIES.map((item) => item.code).sort((a, b) => b.length - a.length).join("|");
-const FUNDING_TERMS = /\b(?:savings?|cash|funds?|scholarships?|grants?|loans?|income|available|received|have)\b/gi;
+const FUNDING_TERMS = /\b(?:savings?|cash|funds?|scholarships?|grants?|loans?|income|wages?|paychecks?|pay\s+cheques?|salar(?:y|ies)|work\s+pay|available|received|have)\b/gi;
 const OBLIGATION_TERMS = /\b(?:tuition|fees?|bill|invoice|rent|deposit|living|travel|visa|insurance|payment|expense|cost|due|payable)\b/gi;
 
 function explicitMoneyMentions(text: string): MoneyMention[] {
@@ -111,13 +111,52 @@ function hasExplicitConversion(rates: Record<string, number>, from: string, to: 
   return from === to || rates[`${from}>${to}`] != null || rates[`${to}>${from}`] != null;
 }
 
-function explicitDates(text: string): DatedMention[] {
-  return [...text.matchAll(ISO_DATE_PATTERN)].flatMap((match) => {
+function addRelativeDate(referenceDate: string, amount: number, unit: string): string | null {
+  const date = new Date(`${referenceDate}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime()) || !Number.isInteger(amount) || amount < 0) return null;
+  if (unit.startsWith("day")) {
+    date.setUTCDate(date.getUTCDate() + amount);
+  } else if (unit.startsWith("week")) {
+    date.setUTCDate(date.getUTCDate() + amount * 7);
+  } else {
+    const dayOfMonth = date.getUTCDate();
+    date.setUTCDate(1);
+    date.setUTCMonth(date.getUTCMonth() + amount);
+    const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+    date.setUTCDate(Math.min(dayOfMonth, lastDay));
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function explicitDates(text: string, referenceDate: string): DatedMention[] {
+  const absoluteDates = [...text.matchAll(ISO_DATE_PATTERN)].flatMap((match) => {
     const date = match[0];
     if (!ISO_DATE.safeParse(date).success) return [];
     const start = match.index ?? 0;
     return [{ date, start, end: start + date.length }];
   });
+  const numberWords: Record<string, number> = {
+    a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5,
+    six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  };
+  const relativeDates = [...text.matchAll(/\b(?:in|after)\s+(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?|months?)\b/gi)].flatMap((match) => {
+    const amountToken = match[1]?.toLowerCase();
+    const amount = amountToken ? (numberWords[amountToken] ?? Number(amountToken)) : Number.NaN;
+    const date = addRelativeDate(referenceDate, amount, match[2]?.toLowerCase() ?? "");
+    const start = match.index ?? 0;
+    return date ? [{ date, start, end: start + match[0].length }] : [];
+  });
+  return [...absoluteDates, ...relativeDates];
+}
+
+function nearestAssociatedDate(dates: DatedMention[], amountOffset: number): string | undefined {
+  // In prose such as "the scholarship is due in three weeks, and €700 wages
+  // arrive in seven days", the second amount is textually closer to the first
+  // date. Prefer a date phrase following this amount before falling back to a
+  // preceding phrase ("in seven days, I will receive €700").
+  const following = dates.filter((date) => date.start >= amountOffset);
+  return [...(following.length ? following : dates)]
+    .sort((a, b) => Math.abs(a.start - amountOffset) - Math.abs(b.start - amountOffset))[0]?.date;
 }
 
 function nearestTermDistance(text: string, term: RegExp, offset: number): number | null {
@@ -175,6 +214,8 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
   const asOfDate = asOfMatch && ISO_DATE.safeParse(asOfMatch[1]).success
     ? asOfMatch[1]
     : undefined;
+  const referenceDate = asOfDate ?? todayISO(null);
+  const hasRelativeDates = /\b(?:in|after)\s+(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|weeks?|months?)\b/i.test(text);
   const fxRates = explicitExchangeRates(text);
 
   const fundingSources: AnalyzeFundingGapInput["fundingSources"] = [];
@@ -198,24 +239,36 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
         /\bconditional\b/i.test(nearby) ? "conditional"
           : /\bestimated?\b/i.test(nearby) ? "estimated"
             : /\bunverified\b/i.test(nearby) ? "unverified"
-              : /\b(expected|approved|confirmed pending|will receive|will arrive)\b/i.test(nearby) ? "confirmed_pending"
+              : /\b(expected|approved|confirmed pending|will receive|will arrive)\b/i.test(nearby) ||
+                (/\b(due|payday)\b/i.test(nearby) && /\b(?:wages?|paychecks?|pay\s+cheques?|salar(?:y|ies)|work\s+pay)\b/i.test(nearby)) ? "confirmed_pending"
                 : /\b(available|in hand|currently have|\bhave\b|received)\b/i.test(nearby) ? "confirmed_available"
                   : undefined;
       if (!status) return null;
-      const fundingKind = nearby.match(/\b(savings?|scholarships?|grants?|loans?|income|family support|cash)\b/i)?.[1]?.toLowerCase();
+      const fundingKind = [...nearby.matchAll(/\b(savings?|scholarships?|grants?|loans?|income|wages?|paychecks?|pay\s+cheques?|salar(?:y|ies)|work\s+pay|family support|cash)\b/gi)]
+        .map((match) => {
+          const start = match.index ?? 0;
+          return {
+            value: match[1]?.toLowerCase() ?? "",
+            distance: start <= localOffset && start + match[0].length >= localOffset
+              ? 0
+              : Math.min(Math.abs(start - localOffset), Math.abs(start + match[0].length - localOffset)),
+          };
+        })
+        .sort((a, b) => a.distance - b.distance)[0]?.value;
+      const isIncomeKind = fundingKind === "income" || /\b(?:wages?|paychecks?|pay\s+cheques?|salar(?:y|ies)|work\s+pay)\b/i.test(fundingKind ?? "");
       const kind = fundingKind?.startsWith("saving") ? "savings"
         : fundingKind?.startsWith("scholarship") ? "scholarship"
           : fundingKind?.startsWith("grant") ? "other"
             : fundingKind?.startsWith("loan") ? "loan"
-              : fundingKind?.startsWith("income") ? "income"
+              : isIncomeKind ? "income"
                 : fundingKind === "family support" ? "family"
                   : "other";
+      const datedMentions = explicitDates(nearby, referenceDate);
       const expectedDate = status === "confirmed_pending" || status === "conditional" || status === "estimated" || status === "unverified"
-        ? explicitDates(nearby).filter((d) => d.date !== asOfDate)
-            .sort((a, b) => Math.abs(a.start - localOffset) - Math.abs(b.start - localOffset))[0]?.date
+        ? nearestAssociatedDate(datedMentions.filter((d) => d.date !== asOfDate), localOffset)
         : undefined;
       const availableDate = status === "confirmed_available"
-        ? explicitDates(nearby).sort((a, b) => Math.abs(a.start - localOffset) - Math.abs(b.start - localOffset))[0]?.date
+        ? nearestAssociatedDate(datedMentions, localOffset)
         : undefined;
       fundingSources.push({
         label: fundingKind ? `${fundingKind[0].toUpperCase()}${fundingKind.slice(1)}` : "Funding",
@@ -234,8 +287,7 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
         : /\bplanned\b/i.test(nearby) ? "planned"
           : /\b(committed|bill|invoice|due|payable)\b/i.test(nearby) ? "committed"
             : undefined;
-    const dueDate = explicitDates(nearby)
-      .sort((a, b) => Math.abs(a.start - localOffset) - Math.abs(b.start - localOffset))[0]?.date;
+    const dueDate = nearestAssociatedDate(explicitDates(nearby, referenceDate), localOffset);
     if (!status || !dueDate) return null;
     const kind = /\btuition\b/i.test(nearby) ? "tuition"
       : /\bdeposit\b/i.test(nearby) ? "deposit"
@@ -270,7 +322,7 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
   const fxAsOf = rateDate && ISO_DATE.safeParse(rateDate).success ? rateDate : undefined;
   const parsed = AnalyzeFundingGapParams.safeParse({
     planningCurrency,
-    ...(asOfDate ? { asOfDate } : {}),
+    ...(asOfDate || hasRelativeDates ? { asOfDate: referenceDate } : {}),
     fundingSources,
     obligations,
     ...(Object.keys(fxRates).length ? {

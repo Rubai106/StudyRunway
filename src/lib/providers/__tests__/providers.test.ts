@@ -45,6 +45,34 @@ describe("Vertex adapter", () => {
     expect(gotBody.response_format).toEqual({ type: "json_object" });
     expect(result.text).toBe('{"ok":true}');
   });
+
+  it("sends schema-constrained JSON responses to Vertex", async () => {
+    let gotBody: Record<string, unknown> = {};
+    const fakePost = vi.fn(async (_url: string, opts: { body: unknown }) => {
+      gotBody = opts.body as Record<string, unknown>;
+      return { choices: [{ message: { content: '{"ok":true}' }, finish_reason: "stop" }] };
+    });
+    const provider = createVertexProvider(
+      { projectId: "test-project-12345", location: "global", model: "google/gemini-3.5-flash" },
+      fakePost as unknown as typeof postJson,
+      async () => "test-token",
+    );
+    const schema = {
+      type: "object",
+      properties: { ok: { type: "boolean" } },
+      required: ["ok"],
+      additionalProperties: false,
+    };
+
+    await provider.chat(MESSAGES, [], {
+      responseFormat: { type: "json_schema", name: "test_response", schema },
+    });
+
+    expect(gotBody.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "test_response", schema },
+    });
+  });
 });
 
 const savedEnv = { ...process.env };

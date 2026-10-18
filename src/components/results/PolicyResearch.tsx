@@ -32,6 +32,9 @@ export default function PolicyResearch({ data }: { data: Record<string, unknown>
   const note = asString(data["note"]);
   const checkedAt = asString(data["checkedAt"]);
   const isCreditGuide = data["topic"] === "credit_building";
+  const isBankingGuide = data["topic"] === "banking_setup";
+  const isArrivalCostGuide = data["topic"] === "arrival_costs";
+  const isRentalGuide = data["topic"] === "rental_housing";
   const country = asString(data["country"]);
   const sources = readSources(data["sources"]);
   const claims: SupportedClaim[] = asArray<unknown>(data["supportedClaims"]).flatMap((raw) => {
@@ -47,6 +50,26 @@ export default function PolicyResearch({ data }: { data: Record<string, unknown>
           <p className="text-xs font-bold text-[var(--sr-ink)]">Destination guide{country ? ` · ${country}` : ""}</p>
           <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/70">
             General information only, not an eligibility decision or a lending recommendation. Requirements vary by provider and student or immigration status. Confirm them with the linked official sources; approval is never guaranteed.
+          </p>
+        </div>
+      )}
+      {isBankingGuide && (
+        <div className="mb-3 rounded-xl border border-[var(--sr-amber)]/35 bg-[var(--sr-amber)]/5 px-3 py-2.5">
+          <p className="text-xs font-bold text-[var(--sr-ink)]">Banking setup{country ? ` · ${country}` : ""}</p>
+          <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/70">A source-based checklist only. Bank requirements, fees, and whether you can apply before arrival vary by institution; verify them with the linked official provider before relying on them.</p>
+        </div>
+      )}
+      {isArrivalCostGuide && (
+        <div className="mb-3 rounded-xl border border-[var(--sr-amber)]/35 bg-[var(--sr-amber)]/5 px-3 py-2.5">
+          <p className="text-xs font-bold text-[var(--sr-ink)]">Arrival costs{country ? ` · ${country}` : ""}</p>
+          <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/70">One-time setup costs vary. Amounts appear only when a cited official page states them; the guide keeps those costs separate from monthly living expenses.</p>
+        </div>
+      )}
+      {isRentalGuide && (
+        <div className="mb-3 rounded-xl border border-[var(--sr-amber)]/35 bg-[var(--sr-amber)]/5 px-3 py-2.5">
+          <p className="text-xs font-bold text-[var(--sr-ink)]">Rental rules{country ? ` · ${country}` : ""}</p>
+          <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/70">
+            Official guidance can explain local requirements and reporting routes, but it cannot verify a particular listing, landlord, property, or payment recipient. Confirm the details independently before paying.
           </p>
         </div>
       )}

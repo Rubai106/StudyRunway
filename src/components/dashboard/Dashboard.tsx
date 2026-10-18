@@ -8,8 +8,8 @@ import {
   Bell,
   CalendarClock,
   CircleAlert,
-  ClipboardCheck,
   CreditCard,
+  Landmark,
   MessagesSquare,
   WalletCards,
 } from "lucide-react";
@@ -18,6 +18,9 @@ import { buildFeeDeadlineAlerts, localDateToday } from "@/lib/feeAlerts";
 import { requestReminder } from "@/lib/reminders";
 import { asArray, asNumber, asString, formatMinorMoney, formatMoney, isRecord } from "../results/shared";
 import DailyBudgetPlanner from "./DailyBudgetPlanner";
+import ArrivalCostPlanner from "./ArrivalCostPlanner";
+import IncomeShockPlan from "./IncomeShockPlan";
+import RentalSafetyCheck from "./RentalSafetyCheck";
 
 interface DashboardResult {
   component: string;
@@ -257,12 +260,41 @@ function alertTone(urgency: string): string {
   return "border-[var(--sr-line)] bg-white/60 text-[var(--sr-ink)]/60";
 }
 
+function WorkflowStepHeader({
+  number,
+  title,
+  complete,
+}: {
+  number: number;
+  title: string;
+  complete: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span
+        aria-hidden="true"
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${complete ? "bg-[var(--sr-pine)] text-white" : "bg-[var(--sr-mist)] text-[var(--sr-ink)]/60"}`}
+      >
+        {complete ? "✓" : number}
+      </span>
+      <div className="min-w-0">
+        <h4 className="text-sm font-bold leading-snug text-[var(--sr-ink)]">{title}</h4>
+        <p className={`mt-0.5 text-[10px] font-semibold uppercase tracking-wide ${complete ? "text-[var(--sr-pine)]" : "text-[var(--sr-ink)]/45"}`}>
+          {complete ? "Ready" : "To do"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard({ messages, onAsk, onOpenConversation, disabled = false }: Props) {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [today, setToday] = useState("");
   const entries = useMemo(() => resultEntries(messages), [messages]);
   const fundingSource = useMemo(() => latestResult(entries, "financial_outcome"), [entries]);
   const planSource = useMemo(() => latestResult(entries, "action_plan"), [entries]);
+  const scenarioSource = useMemo(() => latestResult(entries, "scenario_comparison"), [entries]);
+  const emailSource = useMemo(() => latestResult(entries, "draft_email"), [entries]);
   const latestDocument = useMemo(() => latestResult(entries, "document_review"), [entries]);
   const funding = useMemo(
     () => fundingSource ? readShortfall(fundingSource.data) : null,
@@ -302,12 +334,19 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
   const activeReminders = reminders.filter((reminder) => !reminder.notifiedAt).slice(0, 3);
   const hasFinanceContext = fundingSource !== null || planSource !== null || latestDocument !== null;
   const statusTitle = funding?.hasGap
-    ? "A funding gap appears in your forecast"
+    ? "A tuition shortfall needs a plan"
     : funding?.knownNoGap
-      ? "No gap appears in the latest forecast"
+      ? "Tuition appears covered in this forecast"
       : fundingSource
-        ? "Funding check available"
-        : "Your finance overview starts here";
+        ? "Review your tuition funding check"
+        : "Start with your tuition and funding dates";
+  const scholarshipDelayComplete = scenarioSource?.data["scenarioType"] === "scholarship_delay";
+  const workflowSteps = [
+    { number: 1, title: "Check funds against the deadline", complete: fundingSource !== null },
+    { number: 2, title: "Stress-test a late scholarship", complete: scholarshipDelayComplete },
+    { number: 3, title: "Create prioritized next steps", complete: planSource !== null },
+    { number: 4, title: "Prepare a university email draft", complete: emailSource !== null },
+  ];
 
   return (
     <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8 sm:py-9">
@@ -325,45 +364,94 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
           </p>
         </div>
 
-        <section className={`mt-7 overflow-hidden rounded-3xl border ${funding?.hasGap ? "border-[var(--sr-amber)]/45 bg-[#fbf3e2]" : "border-[var(--sr-line)] bg-white/70"}`} aria-labelledby="dashboard-funding-title">
-          <div className="grid gap-6 p-5 sm:p-7 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-            <div className="max-w-2xl">
-              <div className="flex items-center gap-2 text-xs font-semibold text-[var(--sr-ink)]/55">
-                <WalletCards size={15} aria-hidden="true" />
-                Latest funding check
+        <section className={`mt-7 overflow-hidden rounded-3xl border ${funding?.hasGap ? "border-[var(--sr-amber)]/45 bg-[#fbf3e2]" : "border-[var(--sr-line)] bg-white/70"}`} aria-labelledby="dashboard-tuition-plan-title">
+          <div className="p-5 sm:p-7">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="max-w-2xl">
+                <div className="flex items-center gap-2 text-xs font-semibold text-[var(--sr-pine)]">
+                  <WalletCards size={15} aria-hidden="true" />
+                  Guided tuition workflow
+                </div>
+                <h3 id="dashboard-tuition-plan-title" className="mt-2 text-xl font-bold leading-snug sm:text-2xl">Tuition shortfall plan</h3>
+                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">Check the deadline, test a funding delay, get prioritized next steps, and prepare a message for your university.</p>
               </div>
-              <h3 id="dashboard-funding-title" className="mt-2 text-xl font-bold leading-snug sm:text-2xl">{statusTitle}</h3>
+              <span className="rounded-full border border-[var(--sr-line)] bg-white/60 px-3 py-1.5 text-[11px] font-semibold text-[var(--sr-ink)]/60">
+                {workflowSteps.filter((step) => step.complete).length} of 4 steps ready
+              </span>
+            </div>
+
+            <div className={`mt-5 rounded-2xl border px-4 py-3.5 ${funding?.hasGap ? "border-[var(--sr-amber)]/35 bg-white/70" : "border-[var(--sr-line)] bg-white/55"}`}>
+              <p className="text-sm font-bold text-[var(--sr-ink)]">{statusTitle}</p>
               {funding?.hasGap && funding.amountText ? (
-                <p className="mt-2 text-sm text-[var(--sr-ink)]/75">
-                  Projected shortfall: <strong className="font-bold text-[var(--sr-ink)]">{funding.amountText}</strong>
-                  {funding.date && <> by <strong className="font-semibold">{funding.date}</strong></>}
+                <p className="mt-1 text-sm text-[var(--sr-ink)]/75">
+                  Forecast shortfall: <strong>{funding.amountText}</strong>{funding.date && <> by <strong>{funding.date}</strong></>}
                 </p>
               ) : funding?.verdict ? (
-                <p className="mt-2 line-clamp-2 max-w-2xl text-sm leading-relaxed text-[var(--sr-ink)]/65">{funding.verdict}</p>
+                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">{funding.verdict}</p>
               ) : (
-                <p className="mt-2 max-w-xl text-sm leading-relaxed text-[var(--sr-ink)]/65">
-                  Start with a funding check or try the sample budget. The dashboard only shows amounts and dates returned by your finance results.
-                </p>
+                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">Add confirmed funds, expected scholarship dates, tuition amount, currency, and due date. The forecast will keep uncertain money separate.</p>
               )}
               {fundingSource && (
-                <button type="button" onClick={() => onOpenConversation(fundingSource.messageId)} className="mt-4 inline-flex items-center gap-1.5 rounded-lg text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4 hover:text-[var(--sr-pine)]/75">
-                  Open funding result <ArrowUpRight size={14} aria-hidden="true" />
+                <button type="button" onClick={() => onOpenConversation(fundingSource.messageId)} className="mt-2 inline-flex items-center gap-1 rounded-lg text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4 hover:text-[var(--sr-pine)]/75">
+                  Review funding calculation <ArrowUpRight size={13} aria-hidden="true" />
                 </button>
               )}
             </div>
-            <div className="flex flex-wrap gap-2 md:justify-end">
-              <button type="button" onClick={() => onAsk("Help me check whether my tuition and study costs are funded. Ask me for any missing amounts, currencies, and deadlines before calculating.")} disabled={disabled} className="rounded-xl bg-[var(--sr-pine)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/90 disabled:opacity-50">
-                Check my funding
-              </button>
-              {!hasFinanceContext && (
-                <button type="button" onClick={() => onAsk("Try the sample student budget — show me the Limerick sample")} disabled={disabled} className="rounded-xl border border-[var(--sr-line)] bg-white/75 px-4 py-2.5 text-sm font-semibold text-[var(--sr-ink)]/75 transition hover:bg-white disabled:opacity-50">
-                  Try sample budget
+
+            <ol className="mt-4 grid gap-3 md:grid-cols-2" aria-label="Tuition shortfall plan steps">
+              <li className="rounded-2xl border border-[var(--sr-line)] bg-white/70 p-4">
+                <WorkflowStepHeader number={1} title="Check funds against the deadline" complete={fundingSource !== null} />
+                <p className="mt-2 text-xs leading-relaxed text-[var(--sr-ink)]/60">Compare money available by the due date with tuition and other dated bills.</p>
+                <button type="button" onClick={() => onAsk("Create or update my tuition shortfall plan. Ask for any missing tuition amount, currency, due date, confirmed funds available by that date, and expected funding amounts and arrival dates. Treat an unqualified $ as USD and say that assumption. Once enough details are confirmed, calculate the dated funding gap and separate available, expected, and uncertain money. Do not invent figures or dates.")} disabled={disabled} className="mt-3 rounded-lg bg-[var(--sr-pine)] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[var(--sr-pine)]/90 disabled:opacity-50">
+                  {fundingSource ? "Update funding check" : "Start funding check"}
                 </button>
-              )}
-            </div>
+              </li>
+              <li className="rounded-2xl border border-[var(--sr-line)] bg-white/70 p-4">
+                <WorkflowStepHeader number={2} title="Stress-test a late scholarship" complete={scholarshipDelayComplete} />
+                <p className="mt-2 text-xs leading-relaxed text-[var(--sr-ink)]/60">Compare your forecast with a clearly labeled 14-day delay. This is a what-if, not a prediction.</p>
+                <button type="button" onClick={() => onAsk("In my tuition shortfall plan, simulate what happens if the scholarship arrives 14 days late. Use only my latest confirmed tuition and funding details; compare the baseline and delayed scenario, including the remaining shortfall and date. If there is no single dated scholarship in the plan, ask me which funding source and expected date to use. Do not change my baseline plan or treat the scholarship as guaranteed.")} disabled={disabled} className="mt-3 rounded-lg border border-[var(--sr-line)] bg-white px-3 py-2 text-xs font-semibold text-[var(--sr-pine)] transition hover:bg-[var(--sr-mist)] disabled:opacity-50">
+                  {scholarshipDelayComplete ? "Re-run delay scenario" : "Test a 14-day delay"}
+                </button>
+                {scenarioSource && <button type="button" onClick={() => onOpenConversation(scenarioSource.messageId)} className="ml-3 text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4">Review latest scenario</button>}
+              </li>
+              <li className="rounded-2xl border border-[var(--sr-line)] bg-white/70 p-4">
+                <WorkflowStepHeader number={3} title="Create prioritized next steps" complete={planSource !== null} />
+                <p className="mt-2 text-xs leading-relaxed text-[var(--sr-ink)]/60">Prioritize the deadline and confirm uncertain funding. University options are suggestions to verify, not promises.</p>
+                {actions.length > 0 && (
+                  <ul className="mt-3 space-y-2 border-t border-[var(--sr-line)] pt-3">
+                    {actions.slice(0, 2).map((action) => (
+                      <li key={action.id} className="text-xs">
+                        <p className="font-semibold text-[var(--sr-ink)]">{action.label}</p>
+                        {(action.urgency || action.deadline) && <p className="mt-0.5 text-[10px] font-medium text-[var(--sr-amber)]">{action.urgency}{action.urgency && action.deadline ? " · " : ""}{action.deadline}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="mt-3 flex items-center gap-3">
+                  <button type="button" onClick={() => onAsk("Build or update the prioritized next steps for my tuition shortfall plan using my confirmed funding forecast. Put the earliest tuition deadline and amount gap first, then list funding dates that need confirmation and any missing information. Do not assume a payment plan, extension, grant, or scholarship is approved. Show what to verify with the university.")} disabled={disabled} className="rounded-lg border border-[var(--sr-line)] bg-white px-3 py-2 text-xs font-semibold text-[var(--sr-pine)] transition hover:bg-[var(--sr-mist)] disabled:opacity-50">
+                    {planSource ? "Update next steps" : "Build next steps"}
+                  </button>
+                  {planSource && <button type="button" onClick={() => onOpenConversation(planSource.messageId)} className="text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4">Review action plan</button>}
+                </div>
+              </li>
+              <li className="rounded-2xl border border-[var(--sr-line)] bg-white/70 p-4">
+                <WorkflowStepHeader number={4} title="Prepare a university email draft" complete={emailSource !== null} />
+                <p className="mt-2 text-xs leading-relaxed text-[var(--sr-ink)]/60">Ask about an installment plan, deadline extension, or emergency support using only your confirmed details.</p>
+                <button type="button" onClick={() => onAsk("Draft an email to my university's student finance office about my tuition shortfall. Use only confirmed figures and dates from my plan, ask about available installment arrangements, an extension, or emergency student support, and clearly phrase these as questions rather than guaranteed options. Ask me for any missing recipient or identifying details. The draft must be shown for my approval and must never be sent.")} disabled={disabled} className="mt-3 rounded-lg border border-[var(--sr-line)] bg-white px-3 py-2 text-xs font-semibold text-[var(--sr-pine)] transition hover:bg-[var(--sr-mist)] disabled:opacity-50">
+                  {emailSource ? "Prepare another draft" : "Prepare email draft"}
+                </button>
+                {emailSource && <button type="button" onClick={() => onOpenConversation(emailSource.messageId)} className="ml-3 text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4">Review latest draft</button>}
+              </li>
+            </ol>
+            <p className="mt-4 border-t border-[var(--sr-line)]/80 pt-3 text-[11px] leading-relaxed text-[var(--sr-ink)]/50">
+              Scenarios do not change your forecast. Email drafts require your review; StudyRunway does not send messages or payments.
+            </p>
           </div>
-          {fundingSource && <p className="border-t border-[var(--sr-line)]/80 px-5 py-2.5 text-[11px] text-[var(--sr-ink)]/50 sm:px-7">Based on the latest funding result in this conversation. Check its assumptions and evidence before acting.</p>}
         </section>
+
+        <IncomeShockPlan onAsk={onAsk} disabled={disabled} />
+
+        <RentalSafetyCheck onAsk={onAsk} disabled={disabled} />
 
         {today && (
           <section className="mt-5 rounded-2xl border border-[var(--sr-amber)]/35 bg-[#fbf3e2]/70 p-5 sm:p-6" aria-labelledby="dashboard-fee-alerts-title">
@@ -528,7 +616,22 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
           )}
         </section>
 
-        <DailyBudgetPlanner />
+        <section className="mt-5 flex flex-col gap-4 rounded-2xl border border-[var(--sr-line)] bg-white/60 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6" aria-labelledby="dashboard-transfer-plan-title">
+          <div className="flex items-start gap-3">
+            <ArrowLeftRight size={18} className="mt-0.5 shrink-0 text-[var(--sr-pine)]" aria-hidden="true" />
+            <div>
+              <p className="text-xs font-semibold text-[var(--sr-pine)]">Pay by the deadline</p>
+              <h3 id="dashboard-transfer-plan-title" className="mt-1 text-lg font-bold">Compare tuition transfer offers</h3>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--sr-ink)]/60">Compare provider quotes by what the university receives after FX, sending and recipient fees, delivery windows, and limits. The app has no live provider feed.</p>
+            </div>
+          </div>
+          <button type="button" onClick={() => onAsk("Help me compare transfer offers for a tuition payment. Ask for the send and receive currencies, amount, payment deadline, and each actual provider quote: rate, whether sender fee is deducted or added, sender fee, intermediary or recipient fee, delivery window, quote time, and any send limits. Rank deadline-feasible offers by net amount the university receives. Mark user-entered quotes as unverified, exclude unknown fees from confident rankings, and never invent a live rate or claim that a reference estimate is a provider quote.")} disabled={disabled} className="shrink-0 rounded-xl bg-[var(--sr-pine)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/90 disabled:opacity-50">
+            Compare offers
+          </button>
+        </section>
+
+        <DailyBudgetPlanner onAsk={onAsk} disabled={disabled} />
+        <ArrivalCostPlanner onAsk={onAsk} disabled={disabled} />
 
         <section className="mt-5 flex flex-col gap-4 rounded-2xl border border-[var(--sr-line)] bg-white/60 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6" aria-labelledby="dashboard-credit-guide-title">
           <div className="flex items-start gap-3">
@@ -536,45 +639,29 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
             <div>
               <p className="text-xs font-semibold text-[var(--sr-pine)]">Official-source research</p>
               <h3 id="dashboard-credit-guide-title" className="mt-1 text-lg font-bold">Credit-building guide by destination</h3>
-              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--sr-ink)]/60">Learn how international students may start a local credit history, with cited sources and clear eligibility caveats. Approval is never promised.</p>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--sr-ink)]/60">Learn how students may start a local credit history and what to check when a landlord or provider asks for a cosigner. Cited sources, eligibility caveats, and no promise of approval.</p>
             </div>
           </div>
-          <button type="button" onClick={() => onAsk("Research an official-source guide for how an international student can start a local credit history in my destination country. Ask me which country I will study in if it is not already confirmed. Explain source-supported steps and eligibility caveats; do not recommend borrowing or imply that I will qualify or be approved.")} disabled={disabled} className="shrink-0 rounded-xl bg-[var(--sr-pine)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/90 disabled:opacity-50">
+          <button type="button" onClick={() => onAsk("Research an official-source guide for an international student starting a local credit history in my destination country. Include source-supported ways to check a credit file, eligibility requirements and limitations, and official alternatives or processes to ask about when renting or opening services without a local history or cosigner. Ask for my destination country if it is not confirmed. Do not recommend borrowing or imply I qualify, will be approved, or that an alternative is guaranteed.")} disabled={disabled} className="shrink-0 rounded-xl bg-[var(--sr-pine)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/90 disabled:opacity-50">
             Research credit guide
           </button>
         </section>
 
-        <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.8fr)]">
-          <section className="rounded-2xl border border-[var(--sr-line)] bg-white/60 p-5 sm:p-6" aria-labelledby="dashboard-actions-title">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2 text-xs font-semibold text-[var(--sr-ink)]/55"><ClipboardCheck size={15} aria-hidden="true" />Plan</div>
-                <h3 id="dashboard-actions-title" className="mt-1 text-lg font-bold">Next steps</h3>
-              </div>
-              {planSource && <button type="button" onClick={() => onOpenConversation(planSource.messageId)} className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4">Open plan</button>}
+        <section className="mt-5 flex flex-col gap-4 rounded-2xl border border-[var(--sr-line)] bg-white/60 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6" aria-labelledby="dashboard-banking-guide-title">
+          <div className="flex items-start gap-3">
+            <Landmark size={18} className="mt-0.5 shrink-0 text-[var(--sr-pine)]" aria-hidden="true" />
+            <div>
+              <p className="text-xs font-semibold text-[var(--sr-pine)]">Official-source research</p>
+              <h3 id="dashboard-banking-guide-title" className="mt-1 text-lg font-bold">Set up banking in your destination</h3>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--sr-ink)]/60">Check official account-opening documents, fees, timing, and whether you can apply before arrival. Requirements depend on country and provider.</p>
             </div>
-            {actions.length > 0 ? (
-              <ol className="mt-4 divide-y divide-[var(--sr-line)]">
-                {actions.map((action, index) => (
-                  <li key={`${action.id}-${index}`} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold leading-snug">{action.label}</p>
-                      {(action.deadline || action.urgency) && <p className="mt-1 text-xs font-medium text-[var(--sr-amber)]">{action.urgency}{action.urgency && action.deadline ? " · " : ""}{action.deadline}</p>}
-                      {action.detail && <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/60">{action.detail}</p>}
-                    </div>
-                    <button type="button" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REMINDER_EVENT, { detail: { title: action.deadline ? `${action.label} — deadline ${action.deadline}` : action.label } }))} className="shrink-0 rounded-lg border border-[var(--sr-line)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--sr-pine)] transition hover:bg-[var(--sr-pine)]/5">Remind me</button>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="mt-4 rounded-xl bg-[var(--sr-mist)]/45 px-4 py-4">
-                <p className="text-sm font-medium">No action plan yet</p>
-                <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/60">Ask the agent to build a dated plan from your tuition, funding, and living-cost details.</p>
-                <button type="button" onClick={() => onAsk("Build a prioritized student-finance action plan from my confirmed tuition deadlines, funding, and costs. Ask for any missing details.")} disabled={disabled} className="mt-3 text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4 disabled:opacity-50">Create an action plan</button>
-              </div>
-            )}
-          </section>
+          </div>
+          <button type="button" onClick={() => onAsk("Research official banking setup guidance for an international student moving to my destination. Ask me for the country if not confirmed. Find official government, financial-regulator, bank, or university pages that state account-opening documents, address/residency requirements, fees, appointment or processing time, and whether opening before arrival is allowed. Include practical official fallback ways to pay early rent and bills if no local account is available. Cite every factual claim, state when checked, do not guarantee eligibility, and do not invent provider terms.")} disabled={disabled} className="shrink-0 rounded-xl bg-[var(--sr-pine)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/90 disabled:opacity-50">
+            Research banking setup
+          </button>
+        </section>
 
+        <div className="mt-5">
           <section className="rounded-2xl border border-[var(--sr-line)] bg-white/60 p-5 sm:p-6" aria-labelledby="dashboard-reminders-title">
             <div className="flex items-start justify-between gap-3">
               <div>

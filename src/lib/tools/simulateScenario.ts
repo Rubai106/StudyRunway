@@ -18,7 +18,7 @@ import { formatMinor } from "../currency";
 import { buildForecast, type ForecastResult } from "../forecast";
 import { applyScenario, diffForecasts } from "../scenarios";
 import { analyzeQuote } from "../transfers";
-import { OBLIGATION_KINDS, Scenario, formatDateLong } from "../model";
+import { OBLIGATION_KINDS, Scenario, addDaysISO, formatDateLong } from "../model";
 import { scaleMinor } from "../money";
 import {
   currencyCodeSchema,
@@ -30,6 +30,12 @@ import {
 import type { ToolDefinition, ToolResult } from "./types";
 
 export const ScenarioInputSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("income_shock"),
+    sourceId: z.string().min(1).describe("Unconfirmed work-income funding source to stress"),
+    delayDays: z.number().int().min(0).max(365).describe("Days to delay the expected paycheck"),
+    reductionPercent: z.number().min(0).max(100).describe("Percent reduction in that expected paycheck"),
+  }),
   z.object({
     type: z.literal("scholarship_delay"),
     sourceId: z.string().min(1).describe("Funding source id to delay"),
@@ -209,7 +215,7 @@ function implicationForForecastDiff(
 export const simulateScenarioTool: ToolDefinition = {
   name: "simulate_scenario",
   description:
-    "Run a what-if scenario (scholarship_delay, expense_increase, fx_shock, or transfer_fee_change) on a deep " +
+    "Run a what-if scenario (income_shock, scholarship_delay, expense_increase, fx_shock, or transfer_fee_change) on a deep " +
     "copy of the plan and return baseline-vs-scenario diffs, the changed assumptions, and a practical implication. " +
     "The input plan is never mutated. Optional user-stated funding and tuition installment options are simulated independently against the stress case, with the remaining gap calculated for each. Installment approval and backup-fund availability are never presumed.",
   parameters: SimulateScenarioParams,
@@ -291,6 +297,80 @@ export const simulateScenarioTool: ToolDefinition = {
           evidence: [{
             label: "Quote re-analysis (engine-computed)",
             detail: "Each affected quote was re-analyzed with the deterministic analyzeQuote() arithmetic on a deep copy; the plan itself was not mutated.",
+          }],
+        };
+      }
+
+      if (scenario.type === "income_shock") {
+        const originalIncome = state.fundingSources.find((source) => source.id === scenario.sourceId);
+        if (
+          !originalIncome
+          || originalIncome.kind !== "income"
+          || originalIncome.status === "confirmed_available"
+          || originalIncome.amountMinor === null
+          || originalIncome.expectedDate === null
+        ) {
+          return {
+            ok: false,
+            summary: "simulate_scenario: income_shock requires one dated, unreceived work-income source with a stated amount. No figures were changed or simulated.",
+          };
+        }
+
+        const stressedState = JSON.parse(JSON.stringify(state)) as typeof state;
+        const stressedIncome = stressedState.fundingSources.find((source) => source.id === scenario.sourceId);
+        if (!stressedIncome) {
+          return { ok: false, summary: "simulate_scenario: the selected work-income source was not found in the scenario copy." };
+        }
+        const originalAmountMinor = stressedIncome.amountMinor as number;
+        const originalDate = stressedIncome.expectedDate as string;
+        stressedIncome.amountMinor = scaleMinor(originalAmountMinor, 1 - scenario.reductionPercent / 100);
+        stressedIncome.expectedDate = addDaysISO(originalDate, scenario.delayDays);
+
+        const modified = buildForecast(stressedState);
+        const diff = diffForecasts(baseline, modified);
+        const delayNote = "Projected work income " + formatMinor(originalAmountMinor, stressedIncome.currency)
+          + " on " + originalDate + " is stressed to " + formatMinor(stressedIncome.amountMinor, stressedIncome.currency)
+          + " on " + stressedIncome.expectedDate + " (" + scenario.delayDays + " day(s) late, "
+          + scenario.reductionPercent + "% lower).";
+        const summary = delayNote + " " + implicationForForecastDiff("income shock", pc, baseline, modified);
+        const recoveryOptions = evaluateRecoveryOptions(stressedState, parsed.data.recoveryOptions);
+
+        return {
+          ok: true,
+          summary,
+          data: {
+            scenarioType: "income_shock",
+            scenarioName: "Income shock",
+            delayDays: scenario.delayDays,
+            reductionPercent: scenario.reductionPercent,
+            incomeSourceLabel: stressedIncome.label,
+            changedAssumptions: [delayNote, ...diff.changedAssumptions],
+            baseline: {
+              minBalanceMinor: baseline.minBalanceMinor,
+              minBalance: formatMinor(baseline.minBalanceMinor, pc),
+              gapDate: baseline.firstGap?.date ?? null,
+              shortfallMinor: baseline.firstGap?.shortfallMinor ?? null,
+              shortfall: baseline.firstGap ? formatMinor(baseline.firstGap.shortfallMinor, pc) : null,
+            },
+            scenario: {
+              minBalanceMinor: modified.minBalanceMinor,
+              minBalance: formatMinor(modified.minBalanceMinor, pc),
+              gapDate: modified.firstGap?.date ?? null,
+              shortfallMinor: modified.firstGap?.shortfallMinor ?? null,
+              shortfall: modified.firstGap ? formatMinor(modified.firstGap.shortfallMinor, pc) : null,
+            },
+            deltaMinBalanceMinor: diff.deltaMinBalanceMinor,
+            deltaMinBalance: (diff.deltaMinBalanceMinor < 0 ? "−" : "+") + formatMinor(Math.abs(diff.deltaMinBalanceMinor), pc),
+            recoveryOptions,
+            recoveryOptionBasis: parsed.data.recoveryOptions.length > 0
+              ? "User-stated what-if options. They are independent scenarios; no option changes the plan or confirms availability, approval, fees, or policy."
+              : null,
+            practicalImplication: summary,
+            planningCurrency: pc,
+          },
+          evidence: [{
+            label: "Income shock forecast (engine-computed)",
+            detail: "Baseline and delayed/reduced-pay forecasts were computed by buildForecast() on a deep copy. Projected wages remain unreceived; the saved plan was not changed.",
           }],
         };
       }
