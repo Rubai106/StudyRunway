@@ -47,4 +47,19 @@ describe("hosted funding analysis", () => {
     expect(prompt).not.toContain("999999");
     expect(prompt).toContain('"inHandMinor":50000');
   });
+
+  it("sends the complete recurring authoritative calculation to Gemini", async () => {
+    let prompt = "";
+    const recurringForm: FundingFormRequest = {
+      ...form,
+      expenses: [{ ...form.expenses[0], amount: 700, dueDate: "2027-01-01", frequency: "monthly", occurrences: 6 }],
+    };
+    const capture: Provider = { name: "gemini", chat: async (messages) => {
+      prompt = messages[1].content;
+      return { text: output, toolCalls: [], stopReason: "stop" };
+    } };
+    await generateFundingAnalysis(recurringForm, { provider: capture, name: "gemini", model: "gemini-test" });
+    expect(prompt).toContain('"totalOutflowMinor":420000');
+    expect(prompt).toContain('"recurring":{"everyMonths":1,"occurrences":6}');
+  });
 });

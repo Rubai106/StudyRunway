@@ -35,11 +35,17 @@ const FundingInputSchema = z.object({
   kind: z.enum(["savings", "scholarship", "family", "income", "loan", "other"]).optional(),
 });
 
+const RecurringInputSchema = z.object({
+  everyMonths: z.number().int().min(1).max(12),
+  occurrences: z.number().int().min(2).max(60),
+});
+
 const ObligationInputSchema = z.object({
   label: z.string().min(1).max(120),
   amount: z.number().finite().nonnegative().max(1_000_000_000).optional(),
   currency: currencyCodeSchema,
   dueDate: ISO_DATE.optional(),
+  recurring: RecurringInputSchema.optional(),
   status: z.enum(["planned", "committed", "paid"]),
   kind: z.enum(["tuition", "deposit", "rent", "living", "travel", "visa", "insurance", "other"]).optional(),
 });
@@ -367,7 +373,7 @@ export function fundingGapInputToToolPlan(input: AnalyzeFundingGapInput): ToolPl
       amountMinor: obligation.amount === undefined ? null : toMinor(obligation.amount, obligation.currency),
       currency: obligation.currency,
       dueDate: obligation.dueDate ?? null,
-      recurring: null,
+      recurring: obligation.recurring ?? null,
       status: obligation.status,
       notes: "",
       evidenceIds: [],
@@ -401,6 +407,7 @@ export function fundingGapInputFromPlan(plan: ToolPlanInput): AnalyzeFundingGapI
       ...(obligation.amountMinor == null ? {} : { amount: toMajor(obligation.amountMinor, obligation.currency) }),
       currency: obligation.currency,
       ...(obligation.dueDate ? { dueDate: obligation.dueDate } : {}),
+      ...(obligation.recurring ? { recurring: obligation.recurring } : {}),
       status: obligation.status,
       kind: obligation.kind,
     })),

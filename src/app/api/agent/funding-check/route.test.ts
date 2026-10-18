@@ -25,6 +25,17 @@ describe("POST /api/agent/funding-check", () => {
     expect(body.data["fundingSplit"]).toMatchObject({ inHandMinor: 50000, uncertainInflowMinor: 80000 });
   });
 
+  it("expands a monthly structured expense into the complete dated schedule", async () => {
+    const response = await POST(request({
+      ...valid,
+      expenses: [{ ...valid.expenses[0], amount: 700, dueDate: "2027-01-01", frequency: "monthly", occurrences: 6 }],
+    }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data: { fundingSplit: { totalOutflowMinor: number }; cashFlow: { bills: Array<{ recurring: unknown; dueDate: string | null }> } } };
+    expect(body.data.fundingSplit.totalOutflowMinor).toBe(420000);
+    expect(body.data.cashFlow.bills[0]).toMatchObject({ dueDate: "2027-01-01", recurring: { everyMonths: 1, occurrences: 6 } });
+  });
+
   it("rejects invalid form data without running a calculation", async () => {
     const response = await POST(request({ ...valid, planningCurrency: "ZZZ" }));
     expect(response.status).toBe(400);
