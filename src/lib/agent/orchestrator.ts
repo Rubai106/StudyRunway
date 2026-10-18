@@ -1047,6 +1047,7 @@ export async function askModelJson<T>(
           content:
             `Your last reply failed because ${failureReason}. Reply again with ONLY one JSON object matching the requested schema, with no prose or Markdown fence. Do not repeat invalid field values.`,
         });
+      }
     }
   }
   throw new Error(`model did not return valid JSON after retry: ${failureReason}`);
