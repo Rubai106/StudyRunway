@@ -249,3 +249,21 @@ The user ran the following checks on `StudyRunway_FinTechathon_2026_BudgetPlanne
 - `npm audit`: still reports 21 findings (4 moderate, 15 high, 2 critical). Do not describe this candidate as security-cleared.
 
 The E2E failure appears to be a test synchronization issue, not a demonstrated production interaction defect: all other budget planner flows passed in the user's sequential run, and the failed assertion observed the button in its expected temporary disabled state. The updated test waits for the UI's readiness condition instead of trying to focus a disabled control.
+## Current verification summary — structured-plan session handoff (2026-10-18)
+
+This summary records verification of the structured funding-plan handoff. The
+form sends a validated session identifier; `/api/agent/funding-check` derives
+one canonical plan, stores it on the matching task, invalidates stale pending
+controls, and calculates from that exact plan. This summary is appended so the
+historical reports above remain unchanged.
+
+| Check | Result | Evidence / limitation |
+|---|---|---|
+| Focused regression tests | PASSED | 23 tests across funding form, funding-check route, and task state. |
+| `npm run typecheck` | PASSED | Full TypeScript check. |
+| `npm run lint` | PASSED | ESLint completed successfully. |
+| `npm test` | PASSED | 37 files, 370 tests passed. |
+| `npm run build` | PASSED | Next.js production build completed. |
+| `npm run e2e` | BLOCKED — ENVIRONMENT | Existing process occupied port 3100 (`EADDRINUSE`); no test assertions ran. |
+| `npm audit` / `npm audit --omit=dev` | BLOCKED — ENVIRONMENT | npm registry audit endpoint failed before returning advisory data. |
+| Live Gemini, Vertex, Wise, deployment | NOT RUN | Automated tests use mocks/local deterministic paths. |

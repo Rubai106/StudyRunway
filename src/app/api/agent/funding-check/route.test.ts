@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { POST } from "./route";
+import { clearStore, getTask, updateTask } from "@/lib/agent/state";
 
 function request(body: unknown, headers: Record<string, string> = {}) {
   return new Request("http://localhost/api/agent/funding-check", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
 
 const valid = {
+  sessionId: "funding-route-test",
   planningCurrency: "EUR",
   asOfDate: "2026-10-18",
   expenses: [{ id: "e1", label: "Tuition", category: "tuition", amount: 1200, currency: "EUR", dueDate: "2027-01-10", frequency: "one_time", occurrences: null, notes: "" }],
@@ -16,6 +18,30 @@ const valid = {
 };
 
 describe("POST /api/agent/funding-check", () => {
+  it("persists the validated canonical plan for the same agent session", async () => {
+    clearStore();
+    updateTask(valid.sessionId, {
+      appliedBudget: {
+        destinationId: "uk-london",
+        destinationLabel: "London",
+        appliedAt: "2026-10-18T00:00:00.000Z",
+        obligationIds: ["lcp-1"],
+        startDate: "2027-01-01",
+        studyMonths: 12,
+      },
+      pendingApproval: { id: "stale", tool: "draft_email", label: "old", argsSummary: "old", args: {} },
+      approvedCalls: [{ id: "approved", tool: "draft_email", args: {} }],
+    });
+    const response = await POST(request(valid));
+    expect(response.status).toBe(200);
+    const task = getTask(valid.sessionId);
+    expect(task?.workingPlan?.planningCurrency).toBe("EUR");
+    expect(task?.workingPlan?.obligations[0]).toMatchObject({ label: "Tuition", amountMinor: 120000, dueDate: "2027-01-10", recurring: null });
+    expect(task?.appliedBudget).toBeNull();
+    expect(task?.pendingApproval).toBeNull();
+    expect(task?.approvedCalls).toEqual([]);
+  });
+
   it("runs the real deterministic forecast and preserves the funding split", async () => {
     const response = await POST(request(valid));
     expect(response.status).toBe(200);

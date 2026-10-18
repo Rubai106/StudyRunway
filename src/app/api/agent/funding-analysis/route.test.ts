@@ -9,6 +9,7 @@ vi.mock("@/lib/fundingAnalysis", () => ({
 import { POST } from "./route";
 
 const valid = {
+  sessionId: "funding-analysis-test",
   planningCurrency: "EUR",
   asOfDate: "2026-10-18",
   expenses: [{ id: "e1", label: "Tuition", category: "tuition", amount: 1200, currency: "EUR", dueDate: "2027-01-10", frequency: "one_time", occurrences: null, notes: "" }],

@@ -678,6 +678,7 @@ export default function ChatWorkspace() {
 
           <FundingForm
             disabled={!sessionReady || streaming}
+            sessionId={sessionId}
             onResult={handleFundingResult}
             onAnalysis={handleFundingAnalysis}
           />

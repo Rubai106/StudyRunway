@@ -105,7 +105,9 @@ server-side explanation from the configured hosted Google Gemini/Vertex-Gemini
 provider. The explanation receives a server-recomputed calculation summary,
 cannot modify the result or trigger actions, and can be retried without
 re-entering the form; if Gemini is unavailable, the deterministic result stays
-visible.
+visible. The submitted form also saves the same validated canonical plan to
+the active agent session, so later scenario and recovery requests reuse the
+baseline without asking the user to re-enter it.
 
 StudyRunway now connects three deterministic capabilities into one workflow:
 

@@ -132,7 +132,9 @@ sources with their own currencies, dates, schedules, and certainty status.
 **Calculate funding readiness** calls `/api/agent/funding-check`, which validates
 the payload on the server and runs the existing deterministic
 `analyze_funding_gap`/forecast engine directly. It does not send the form
-through the model, persist a second plan, or perform a payment. Different
+through the model or perform a payment; the same validated canonical plan is
+saved to the active agent session for later scenarios and recovery planning.
+Different
 currencies remain incomplete unless an explicit FX assumption exists; expected
 or unverified funding is shown separately from money available now.
 The deterministic result is displayed first. The client then calls

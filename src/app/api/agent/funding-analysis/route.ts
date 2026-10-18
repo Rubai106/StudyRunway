@@ -1,12 +1,14 @@
 import { FundingFormRequestSchema } from "@/lib/fundingForm";
 import { formatFundingAnalysis, generateFundingAnalysis } from "@/lib/fundingAnalysis";
-import { requestOriginError } from "@/lib/agent/session";
+import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 const MAX_BODY_BYTES = 256 * 1024;
 
 export async function POST(req: Request): Promise<Response> {
+  const persistenceError = sessionPersistenceResponse();
+  if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);
   if (originError) return Response.json({ ok: false, error: originError }, { status: 403 });
   const contentLength = Number(req.headers.get("content-length") ?? 0);
@@ -17,7 +19,14 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     return Response.json({ ok: false, error: "request body must be valid JSON" }, { status: 400 });
   }
-  const parsed = FundingFormRequestSchema.safeParse(raw);
+  const rawRecord = raw !== null && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : null;
+  const sidErr = sessionIdError(rawRecord?.sessionId);
+  if (sidErr) return Response.json({ ok: false, error: sidErr }, { status: 400 });
+  const { sessionId: _ignoredSessionId, ...formRaw } = rawRecord as Record<string, unknown>;
+  void _ignoredSessionId;
+  const parsed = FundingFormRequestSchema.safeParse(formRaw);
   if (!parsed.success) {
     return Response.json({ ok: false, error: parsed.error.issues.map((issue) => `${issue.path.join(".") || "form"}: ${issue.message}`).join("; ") }, { status: 400 });
   }

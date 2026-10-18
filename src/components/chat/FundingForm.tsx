@@ -7,7 +7,7 @@ import { FUNDING_FORM_CATEGORIES, FUNDING_FORM_FREQUENCIES, type FundingFormRequ
 type Expense = FundingFormRequest["expenses"][number];
 type Source = FundingFormRequest["fundingSources"][number];
 type AnalysisUpdate = { status: "ready"; text: string; provider: string; model: string } | { status: "unavailable"; error: string };
-type Props = { disabled?: boolean; onResult: (result: { summary: string; data: Record<string, unknown> }) => void; onAnalysis?: (update: AnalysisUpdate) => void };
+type Props = { disabled?: boolean; sessionId: string; onResult: (result: { summary: string; data: Record<string, unknown> }) => void; onAnalysis?: (update: AnalysisUpdate) => void };
 
 const currencyOptions = CURRENCIES.map((item) => item.code);
 const expenseLabels: Record<(typeof FUNDING_FORM_CATEGORIES)[number], string> = { tuition: "Tuition", accommodation: "Accommodation", living: "Living expenses", insurance: "Insurance", travel: "Travel", other: "Other" };
@@ -19,7 +19,7 @@ function id(prefix: string) { return `${prefix}-${Date.now()}-${Math.random().to
 function newExpense(): Expense { return { id: id("expense"), label: "", category: "tuition", amount: 0, currency: "EUR", dueDate: null, frequency: "one_time", occurrences: null, notes: "" }; }
 function newSource(): Source { return { id: id("source"), label: "", kind: "savings", amount: 0, currency: "EUR", status: "confirmed_available", availableDate: null, expectedDate: null, notes: "" }; }
 
-export default function FundingForm({ disabled, onResult, onAnalysis }: Props) {
+export default function FundingForm({ disabled, sessionId, onResult, onAnalysis }: Props) {
   const [open, setOpen] = useState(false);
   const [planningCurrency, setPlanningCurrency] = useState("EUR");
   const [asOfDate, setAsOfDate] = useState("");
@@ -41,7 +41,7 @@ export default function FundingForm({ disabled, onResult, onAnalysis }: Props) {
     setAnalysisLoading(true);
     setAnalysisError(null);
     try {
-      const response = await fetch("/api/agent/funding-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const response = await fetch("/api/agent/funding-analysis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, sessionId }) });
       const body = await response.json() as { ok?: boolean; error?: string; analysis?: string; provider?: string; model?: string };
       if (!response.ok || !body.ok || !body.analysis || !body.provider || !body.model) throw new Error(body.error ?? "AI financial analysis is temporarily unavailable.");
       onAnalysis?.({ status: "ready", text: body.analysis, provider: body.provider, model: body.model });
@@ -63,7 +63,7 @@ export default function FundingForm({ disabled, onResult, onAnalysis }: Props) {
     const payload: FundingFormRequest = { planningCurrency, asOfDate: asOfDate || null, expenses, fundingSources: sources };
     setLastPayload(payload);
     try {
-      const response = await fetch("/api/agent/funding-check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const response = await fetch("/api/agent/funding-check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...payload, sessionId }) });
       const body = await response.json() as { ok?: boolean; error?: string; summary?: string; data?: Record<string, unknown> };
       if (!response.ok || !body.ok || !body.data) throw new Error(body.error ?? "The funding check could not be calculated.");
       onResult({ summary: body.summary ?? "Funding readiness calculated from your structured details.", data: body.data });
