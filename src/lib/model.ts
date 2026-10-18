@@ -263,6 +263,28 @@ export function addDaysISO(date: string, days: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
+/** Resolve only explicit relative date phrases against a date in the named timezone. */
+export function resolveRelativeDateISO(
+  value: string,
+  referenceDate: string,
+  timezone: string,
+): string | null {
+  if (!ISO_DATE.safeParse(referenceDate).success || !timezone.trim()) return null;
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date());
+  } catch {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
+  if (ISO_DATE.safeParse(normalized).success) return normalized;
+  if (normalized === "today") return referenceDate;
+  if (normalized === "tomorrow") return addDaysISO(referenceDate, 1);
+  if (normalized === "yesterday") return addDaysISO(referenceDate, -1);
+  const inDays = normalized.match(/^in (\d{1,3}) days?$/);
+  if (inDays) return addDaysISO(referenceDate, Number(inDays[1]));
+  return null;
+}
+
 export function addMonthsISO(date: string, months: number): string {
   const [y, m, d] = date.split("-").map(Number);
   const total = y * 12 + (m - 1) + months;

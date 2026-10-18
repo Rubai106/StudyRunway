@@ -4,9 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LayoutDashboard, MessageSquareText } from "lucide-react";
 import type { AgentStreamEvent, ClarifyQuestion } from "@/lib/events";
 import { publishAgentEvent } from "@/lib/events";
+import { SAMPLE_BUDGET_MESSAGE, SAMPLE_SAFE_TO_SEND_MESSAGE } from "@/lib/demo";
 import { createSSEParser } from "./sse";
 import Composer from "./Composer";
+import FundingForm from "./FundingForm";
 import ClarifyForm from "./ClarifyForm";
+import AssistantMarkdown from "./AssistantMarkdown";
 import ReminderCenter from "../reminders/ReminderCenter";
 import Dashboard from "../dashboard/Dashboard";
 import ResultCard from "../results";
@@ -45,14 +48,6 @@ const EXAMPLES = [
   "What happens if my living expenses increase by 15%?",
   "Help me recover from a tuition funding shortfall.",
 ];
-
-/** Exact message the demo flow recognises as the sample-budget entry point. */
-export const SAMPLE_BUDGET_MESSAGE =
-  "Try the sample student budget — show me the Limerick sample";
-
-/** Exact message the demo flow recognises as the Safe-to-Send sample entry point. */
-export const SAMPLE_SAFE_TO_SEND_MESSAGE =
-  "Try the Safe-to-Send tuition demo scenario";
 
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -218,6 +213,37 @@ export default function ChatWorkspace() {
     [],
   );
 
+  const handleFundingResult = useCallback((result: { summary: string; data: Record<string, unknown> }) => {
+    const assistant: Message = {
+      id: newId(),
+      role: "assistant",
+      text: result.summary,
+      status: "done",
+      results: [{ component: "financial_outcome", data: result.data }],
+      pendingClarifications: [],
+      answeredQuestionIds: [],
+    };
+    setMessages((current) => [...current, assistant]);
+    setActiveView("chat");
+  }, []);
+
+  const handleFundingAnalysis = useCallback((update: { status: "ready"; text: string; provider: string; model: string } | { status: "unavailable"; error: string }) => {
+    setMessages((current) => {
+      const index = [...current].map((message, i) => ({ message, i })).reverse().find(({ message }) => message.role === "assistant" && message.results?.some((result) => result.component === "financial_outcome"))?.i;
+      if (index === undefined) return current;
+      const message = current[index];
+      const resultIndex = message.results?.findIndex((result) => result.component === "financial_outcome") ?? -1;
+      if (resultIndex < 0 || !message.results) return current;
+      const result = message.results[resultIndex];
+      const data = { ...result.data, aiAnalysis: update.status === "ready" ? { status: "ready", text: update.text, provider: update.provider, model: update.model } : { status: "unavailable", message: "AI explanation is temporarily unavailable. Retry from the funding form." } };
+      const results = [...message.results];
+      results[resultIndex] = { ...result, data };
+      const next = [...current];
+      next[index] = { ...message, results };
+      return next;
+    });
+  }, []);
+
   const handleStreamEvent = useCallback(
     (e: AgentStreamEvent) => {
       publishAgentEvent(e);
@@ -236,7 +262,10 @@ export default function ChatWorkspace() {
           );
           break;
         case "assistant_text":
-          updateAssistant((m) => ({ ...m, text: m.text + e.text }));
+          updateAssistant((m) => ({
+            ...m,
+            text: m.text ? `${m.text}\n\n${e.text}` : e.text,
+          }));
           break;
         case "clarify":
           updateAssistant((m) => ({
@@ -647,6 +676,11 @@ export default function ChatWorkspace() {
             </button>
           </div>
 
+          <FundingForm
+            disabled={!sessionReady || streaming}
+            onResult={handleFundingResult}
+            onAnalysis={handleFundingAnalysis}
+          />
           <Composer
             onSend={(text, displayText) => sendMessage(text, { displayText })}
             onStop={stop}
@@ -769,7 +803,7 @@ function AssistantMessage({
     <div id={`assistant-message-${message.id}`} className="mb-6 scroll-mt-4" tabIndex={-1}>
       {message.text && (
         <div className="max-w-[92%] text-sm leading-relaxed">
-          <p className="whitespace-pre-wrap">{message.text}</p>
+          <AssistantMarkdown text={message.text} />
         </div>
       )}
       {showStatus && activeStatus && (

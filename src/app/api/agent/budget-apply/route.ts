@@ -16,7 +16,7 @@
  *   confirmation (approval-gate pattern) before calling this.
  */
 import { applyBudgetToTask } from "@/lib/budgetApply";
-import { requestOriginError, sessionIdError } from "@/lib/agent/session";
+import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
 import { BUDGET_ACTION_ACKS } from "@/lib/budgetApproval";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +25,8 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 256 * 1024;
 
 export async function POST(req: Request): Promise<Response> {
+  const persistenceError = sessionPersistenceResponse();
+  if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);
   if (originError) {
     return Response.json({ ok: false, error: originError }, { status: 403 });

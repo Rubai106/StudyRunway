@@ -1187,12 +1187,12 @@ export function describeDecision(decision: SafeToSendDecision): string {
     return `Safe-to-Send: ready to simulate ${tuition} due ${due}.`;
   }
   if (decision.status === "BLOCKED") {
-    return `Safe-to-Send: blocked — ${decision.reasons[0]?.message ?? "mandatory safety checks failed"}.`;
+    return `Safe-to-Send: blocked for ${tuition} due ${due} — ${decision.reasons[0]?.message ?? "mandatory safety checks failed"}.`;
   }
   if (decision.status === "RISK_DETECTED") {
-    return `Safe-to-Send: risk detected — ${decision.reasons[0]?.message ?? "financial or deadline risk identified"}.`;
+    return `Safe-to-Send: risk detected for ${tuition} due ${due} — ${decision.reasons[0]?.message ?? "financial or deadline risk identified"}.`;
   }
-  return `Safe-to-Send: more information required (${decision.missingFields.length} required input(s) missing).`;
+  return `Safe-to-Send: more information required (${decision.missingFields.length} required input(s) missing); tuition due ${due}.`;
 }
 
 export interface SafeToSendScenario {

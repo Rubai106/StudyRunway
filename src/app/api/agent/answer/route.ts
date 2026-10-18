@@ -8,7 +8,7 @@
  * For approval gates, `answers` should be { decision: "approve" | "deny" }.
  */
 import { submitAnswers } from "@/lib/agent/orchestrator";
-import { requestOriginError, sessionIdError } from "@/lib/agent/session";
+import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,6 +16,8 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 64 * 1024;
 
 export async function POST(req: Request): Promise<Response> {
+  const persistenceError = sessionPersistenceResponse();
+  if (persistenceError) return Response.json({ ok: false, ...(await persistenceError.json()) }, { status: 503 });
   const originError = requestOriginError(req);
   if (originError) {
     return Response.json({ ok: false, error: originError }, { status: 403 });

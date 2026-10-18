@@ -22,7 +22,7 @@
 import { runAgent, type AgentEvent } from "@/lib/agent/orchestrator";
 import { deleteSession, getTask } from "@/lib/agent/state";
 import { writeAuditEvent } from "@/lib/agent/audit";
-import { requestOriginError, sessionIdError } from "@/lib/agent/session";
+import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
 import { checkRateLimit, RATE_MAX_REQUESTS, RATE_WINDOW_MS } from "@/lib/agent/rateLimit";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +46,8 @@ function clientIp(req: Request): string {
 
 
 export async function POST(req: Request): Promise<Response> {
+  const persistenceError = sessionPersistenceResponse();
+  if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);
   if (originError) {
     return Response.json({ error: originError }, { status: 403 });
@@ -136,6 +138,8 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 export async function DELETE(req: Request): Promise<Response> {
+  const persistenceError = sessionPersistenceResponse();
+  if (persistenceError) return persistenceError;
   if (requestOriginError(req)) {
     return Response.json(
       { error: "origin not allowed for this request" },

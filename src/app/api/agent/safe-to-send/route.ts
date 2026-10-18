@@ -1,4 +1,4 @@
-import { sessionIdError, requestOriginError } from "@/lib/agent/session";
+import { sessionIdError, requestOriginError, sessionPersistenceResponse } from "@/lib/agent/session";
 import {
   getSafeToSendActionApprovalAck,
   getSafeToSendExecutionRecord,
@@ -11,6 +11,8 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 256 * 1024;
 
 export async function GET(req: Request): Promise<Response> {
+  const persistenceError = sessionPersistenceResponse();
+  if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);
   if (originError) {
     return Response.json({ ok: false, error: originError }, { status: 403 });
@@ -40,6 +42,8 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  const persistenceError = sessionPersistenceResponse();
+  if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);
   if (originError) {
     return Response.json({ ok: false, error: originError }, { status: 403 });

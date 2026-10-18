@@ -5,11 +5,10 @@
  * facts gathered, the plan, the tool-call log, evidence, pending questions,
  * and approvals. It is zod-validated on every read/write.
  *
- * STORAGE LIMITATION (demo): the store is an in-memory Map keyed by
- * sessionId. It is cleared on server restart and is not shared across
- * instances. Do not treat it as durable storage — it exists so the demo and
- * judging flow works without a database. The client can delete a session via
- * DELETE /api/agent/chat?sessionId=...
+ * STORAGE: the default local store is an in-memory implementation. It is
+ * cleared on server restart and is not shared across instances. Production
+ * routes fail closed unless a shared store integration is configured, or the
+ * deployment is explicitly labelled demo-only with STUDYRUNWAY_DEMO_MODE=true.
  *
  * PII: the state may hold facts the user typed. It is never sent to a model
  * provider wholesale — the orchestrator forwards only task-relevant fields.
@@ -218,16 +217,53 @@ export type TaskState = z.infer<typeof TaskStateSchema>;
 // In-memory store (demo limitation — see header comment).
 // ---------------------------------------------------------------------------
 
-// Use a globalThis-backed map so Next.js development hot reloads do not wipe
-// live task state when an API route recompiles. The map is still process-local:
-// a true process restart clears it, and production instances are not shared.
+export interface TaskStore {
+  get(sessionId: string): TaskState | undefined;
+  set(sessionId: string, state: TaskState): void;
+  delete(sessionId: string): boolean;
+  clear(): void;
+}
+
+/** Local/test store. It is deliberately not presented as durable storage. */
+export class InMemoryTaskStore implements TaskStore {
+  private readonly values = new Map<string, TaskState>();
+
+  get(sessionId: string): TaskState | undefined {
+    return this.values.get(sessionId);
+  }
+
+  set(sessionId: string, state: TaskState): void {
+    this.values.set(sessionId, state);
+  }
+
+  delete(sessionId: string): boolean {
+    return this.values.delete(sessionId);
+  }
+
+  clear(): void {
+    this.values.clear();
+  }
+}
+
+export function sessionPersistenceError(): string | null {
+  const configured = (process.env.STUDYRUNWAY_SESSION_STORE ?? "memory").trim().toLowerCase();
+  const demoOnly = (process.env.STUDYRUNWAY_DEMO_MODE ?? "").trim().toLowerCase() === "true";
+  if (configured === "memory" && (process.env.NODE_ENV !== "production" || demoOnly)) return null;
+  if (configured === "firestore") {
+    return "Durable session storage is selected but no Firestore adapter is installed. Configure the shared store integration before serving production sessions.";
+  }
+  return "Durable session storage is not configured. Set STUDYRUNWAY_SESSION_STORE to a supported shared store, or explicitly set STUDYRUNWAY_DEMO_MODE=true for demo-only in-memory sessions.";
+}
+
+// Use a globalThis-backed store so Next.js development hot reloads do not wipe
+// live task state when an API route recompiles. It remains process-local.
 type StoreGlobal = typeof globalThis & {
-  __studyrunwayAgentTaskStore?: Map<string, TaskState>;
+  __studyrunwayAgentTaskStore?: InMemoryTaskStore;
 };
 const storeGlobal = globalThis as StoreGlobal;
 const store =
   storeGlobal.__studyrunwayAgentTaskStore ??
-  (storeGlobal.__studyrunwayAgentTaskStore = new Map<string, TaskState>());
+  (storeGlobal.__studyrunwayAgentTaskStore = new InMemoryTaskStore());
 
 function nowIso(): string {
   return new Date().toISOString();

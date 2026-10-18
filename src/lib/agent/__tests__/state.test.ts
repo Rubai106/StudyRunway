@@ -2,7 +2,7 @@
  * Tests for the typed task state: validation, store behaviour, and the
  * protected-field rule (model output can never write orchestrator-owned fields).
  */
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import {
   createTask,
   getTask,
@@ -16,11 +16,22 @@ import {
   addEvidence,
   TaskStateSchema,
   ModelUnderstandingSchema,
+  InMemoryTaskStore,
+  sessionPersistenceError,
 } from "../state";
 import { DEMO_LABEL } from "../orchestrator";
 
 beforeEach(() => {
   clearStore();
+});
+
+const originalSessionStore = process.env.STUDYRUNWAY_SESSION_STORE;
+const originalDemoMode = process.env.STUDYRUNWAY_DEMO_MODE;
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  process.env.STUDYRUNWAY_SESSION_STORE = originalSessionStore;
+  process.env.STUDYRUNWAY_DEMO_MODE = originalDemoMode;
 });
 
 describe("task state store", () => {
@@ -40,6 +51,30 @@ describe("task state store", () => {
     createTask("sess-del");
     expect(deleteSession("sess-del")).toBe(true);
     expect(getTask("sess-del")).toBeUndefined();
+  });
+
+  it("supports isolated local stores for separate handlers", () => {
+    const firstHandler = new InMemoryTaskStore();
+    const secondHandler = new InMemoryTaskStore();
+    const task = createTask("local-handler");
+    firstHandler.set(task.sessionId, task);
+    expect(firstHandler.get(task.sessionId)?.taskId).toBe(task.taskId);
+    expect(secondHandler.get(task.sessionId)).toBeUndefined();
+  });
+
+  it("fails closed for production memory storage unless explicitly demo-only", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.STUDYRUNWAY_SESSION_STORE = "memory";
+    delete process.env.STUDYRUNWAY_DEMO_MODE;
+    expect(sessionPersistenceError()).toContain("Durable session storage is not configured");
+    process.env.STUDYRUNWAY_DEMO_MODE = "true";
+    expect(sessionPersistenceError()).toBeNull();
+  });
+
+  it("does not claim an unimplemented Firestore adapter is available", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.STUDYRUNWAY_SESSION_STORE = "firestore";
+    expect(sessionPersistenceError()).toContain("no Firestore adapter is installed");
   });
 
   it("rejects invalid status values", () => {

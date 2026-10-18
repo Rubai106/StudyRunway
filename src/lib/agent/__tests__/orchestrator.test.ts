@@ -10,6 +10,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { z } from "zod";
 import {
   runAgent,
+  askModelJson,
   submitAnswers,
   executeToolCall,
   sanitizeForModel,
@@ -18,7 +19,7 @@ import {
   AgentEventSchemas,
   type AgentEvent,
 } from "../orchestrator";
-import { clearStore, getTask } from "../state";
+import { clearStore, createTask, getTask, updateTask } from "../state";
 import { PING_TOOL } from "../registry";
 import { buildLivingCostPlanTool } from "../../tools/buildLivingCostPlan";
 import { extractDocumentTool } from "../../tools/extractDocument";
@@ -27,7 +28,7 @@ import { draftEmailTool } from "../../tools/draftEmail";
 import { compareTransfersTool } from "../../tools/compareTransfers";
 import { analyzeFundingGapTool } from "../../tools/analyzeFundingGap";
 import { buildActionPlanTool } from "../../tools/buildActionPlan";
-import { upsertSafeToSendDraftTool } from "../../tools/safeToSend";
+import { loadSafeToSendScenarioTool, upsertSafeToSendDraftTool } from "../../tools/safeToSend";
 import { buildLivingCostPlan, getDestination } from "../../livingCosts";
 import { HttpError } from "../../providers/http";
 import type { Provider, ChatResult, ChatMessage, ToolSchema } from "../../providers/types";
@@ -416,6 +417,7 @@ describe("model-driven loop", () => {
     expectValidEvents(events);
     expect(events.some((event) => event.type === "tool_call_end" && event.tool === "upsert_safe_to_send_draft" && event.ok)).toBe(true);
     expect(events.some((event) => event.type === "tool_call_start" && event.tool === "simulate_safe_to_send_payment")).toBe(false);
+    expect(events.filter((event) => event.type === "assistant_text").map((event) => event.text).join(" ")).toContain("2027-09-10");
     const result = events.find((event) => event.type === "result" && event.component === "safe_to_send_decision");
     expect(result).toBeDefined();
     if (result?.type === "result") {
@@ -439,6 +441,118 @@ describe("model-driven loop", () => {
       expect(draft["quotes"]).toHaveLength(1);
       expect(draft["fundingRecords"]).toHaveLength(1);
     }
+  });
+
+  it("does not allow a failed policy lookup to fall back to unsourced advice", async () => {
+    const researchPolicy: ToolDefinition = {
+      name: "research_policy",
+      description: "Research official policy sources.",
+      parameters: z.object({ query: z.string().optional() }),
+      requiresApproval: false,
+      handler: async (): Promise<ToolResult> => ({
+        ok: true,
+        summary: "No verified policy answer returned. No claim-level citations were available.",
+        data: { answer: null, sources: [], supportedClaims: [], checkedAt: "2026-10-18T00:00:00.000Z" },
+      }),
+    };
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "research1", name: "research_policy", args: { query: "credit building in Canada" } }]),
+      textOnly("Try these Canadian banks and this government agency."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-policy-fallback-blocked",
+      message: "How can an international student build credit in Canada?",
+      tools: [PING_TOOL, researchPolicy],
+      provider,
+      maxToolCalls: 1,
+    }));
+
+    expectValidEvents(events);
+    expect(events.filter((event) => event.type === "assistant_text").map((event) => event.text).join(" "))
+      .not.toContain("Canadian banks");
+    expect(events.some((event) => event.type === "assistant_text" && event.text.includes("No verified policy answer"))).toBe(true);
+    expect(events.some((event) => event.type === "assistant_text" && event.text.includes("Retry the search"))).toBe(true);
+    expect(provider.calls).toHaveLength(3);
+  });
+
+  it("keeps verified policy responses available when official claims are cited", async () => {
+    const researchPolicy: ToolDefinition = {
+      name: "research_policy",
+      description: "Research official policy sources.",
+      parameters: z.object({ query: z.string().optional() }),
+      requiresApproval: false,
+      handler: async (): Promise<ToolResult> => ({
+        ok: true,
+        summary: "Official policy research checked one source page.",
+        data: {
+          answer: "The official authority describes how students can check their credit file.",
+          sources: [{ title: "Official authority", uri: "https://example.gov/credit", domain: "example.gov" }],
+          supportedClaims: [{ text: "Students can check their credit file.", sources: [{ uri: "https://example.gov/credit" }] }],
+          checkedAt: "2026-10-18T00:00:00.000Z",
+        },
+      }),
+    };
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "research2", name: "research_policy", args: { query: "credit building" } }]),
+      textOnly("The cited authority explains how students can check their credit file."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-policy-success-grounded",
+      message: "How can an international student build credit in Canada?",
+      tools: [PING_TOOL, researchPolicy],
+      provider,
+      maxToolCalls: 1,
+    }));
+
+    expectValidEvents(events);
+    expect(events.some((event) => event.type === "assistant_text" && event.text.includes("cited authority"))).toBe(true);
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "policy_research" });
+    if (result?.type === "result") {
+      expect(result.data["checkedAt"]).toBe("2026-10-18T00:00:00.000Z");
+      expect(result.data["sources"]).toEqual([{ title: "Official authority", uri: "https://example.gov/credit", domain: "example.gov" }]);
+    }
+  });
+
+  it("uses the structured Safe-to-Send summary instead of inventing a due date", async () => {
+    const safeToSend: ToolDefinition = {
+      name: "upsert_safe_to_send_draft",
+      description: "Update the structured Safe-to-Send draft.",
+      parameters: z.object({ patch: z.record(z.unknown()) }),
+      requiresApproval: false,
+      handler: async (): Promise<ToolResult> => ({
+        ok: true,
+        summary: "Saved Safe-to-Send draft. Safe-to-Send: more information required (1 required input(s) missing).",
+        data: {
+          draft: { tuitionAmountMinor: 100000, tuitionCurrency: "USD", tuitionDueDate: null },
+          decision: { status: "MORE_INFORMATION_REQUIRED", payment: { tuitionAmountMinor: 100000, tuitionCurrency: "USD", dueDate: null } },
+        },
+      }),
+    };
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "safe2", name: "upsert_safe_to_send_draft", args: { patch: {} } }]),
+      textOnly("The tuition is due tomorrow, October 19, 2026."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-safe-summary-authoritative",
+      message: "Run a Safe-to-Send review for my tuition payment.",
+      tools: [PING_TOOL, safeToSend],
+      provider,
+      maxToolCalls: 1,
+    }));
+
+    expectValidEvents(events);
+    const assistantText = events.filter((event) => event.type === "assistant_text").map((event) => event.text).join(" ");
+    expect(assistantText).not.toContain("October 19, 2026");
+    expect(assistantText).toContain("more information required");
+    const result = events.find((event) => event.type === "result");
+    expect(result?.type === "result" && (result.data["decision"] as Record<string, unknown>)["payment"]).toMatchObject({ dueDate: null });
   });
 
   it("continues with grounded tuition figures after a transient provider timeout", async () => {
@@ -955,6 +1069,117 @@ describe("model-driven loop", () => {
       }
     }
     expect(sawRedaction).toBe(true);
+  });
+
+  it("resolves relative clarification dates against the explicit UTC reference date", () => {
+    const state = createTask("s-relative-date");
+    updateTask("s-relative-date", {
+      pendingQuestions: [{
+        id: "due-date",
+        kind: "form",
+        prompt: "When is tuition due?",
+        fields: [{ name: "dueDate", label: "Tuition due date", type: "date", required: true }],
+      }],
+    });
+    expect(submitAnswers("s-relative-date", "due-date", { dueDate: "tomorrow" }).ok).toBe(true);
+    const fact = getTask(state.sessionId)?.confirmedFacts.at(-1);
+    expect(JSON.parse(fact?.value ?? "{}").dueDate).toBe(
+      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    );
+  });
+
+  it("rejects ambiguous clarification dates instead of saving a guess", () => {
+    createTask("s-ambiguous-date");
+    updateTask("s-ambiguous-date", {
+      pendingQuestions: [{
+        id: "due-date",
+        kind: "date",
+        prompt: "When is tuition due?",
+      }],
+    });
+    const result = submitAnswers("s-ambiguous-date", "due-date", { date: "next Friday" });
+    expect(result.ok).toBe(false);
+    expect(getTask("s-ambiguous-date")?.confirmedFacts).toHaveLength(0);
+    expect(getTask("s-ambiguous-date")?.pendingQuestions).toHaveLength(1);
+  });
+});
+
+describe("explicit deterministic demos", () => {
+  it("runs the real sample budget when every model call fails", async () => {
+    const provider = new ScriptedProvider([]);
+    const events = await collect(runAgent({
+      sessionId: "s-configured-sample-budget",
+      message: "Try the sample student budget — show me the Limerick sample",
+      tools: [PING_TOOL, buildLivingCostPlanTool],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "living_cost_plan" });
+    if (result?.type === "result") {
+      const plan = result.data["plan"] as { destinationId?: string; verdict?: string; sources?: unknown[] };
+      expect(plan.destinationId).toBe("ie-limerick");
+      expect(plan.verdict).toBe("shortfall");
+      expect(plan.sources?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("runs the real Safe-to-Send scenario when every model call fails", async () => {
+    const provider = new ScriptedProvider([]);
+    const events = await collect(runAgent({
+      sessionId: "s-configured-safe-demo",
+      message: "Try the Safe-to-Send tuition demo scenario",
+      tools: [PING_TOOL, loadSafeToSendScenarioTool],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "safe_to_send_decision" });
+    expect(events.some((event) => event.type === "tool_call_start" && event.tool === "simulate_safe_to_send_payment")).toBe(false);
+    if (result?.type === "result") {
+      expect(result.data["status"]).toBe("READY_TO_SIMULATE");
+      expect(result.data["simulationApproval"]).toBeTruthy();
+    }
+  });
+});
+
+describe("structured model output", () => {
+  const schema = z.object({ answer: z.string().min(1) });
+  const output = (text: string, stopReason = "stop"): ChatResult => ({
+    text,
+    toolCalls: [],
+    stopReason,
+  });
+
+  it("accepts valid JSON and the supported fenced JSON form", async () => {
+    const valid = new ScriptedProvider([output('{"answer":"ok"}')]);
+    await expect(askModelJson(valid, "Return an answer.", "request", schema)).resolves.toEqual({ answer: "ok" });
+    const fenced = new ScriptedProvider([output("```json\n{\"answer\":\"ok\"}\n```")]);
+    await expect(askModelJson(fenced, "Return an answer.", "request", schema)).resolves.toEqual({ answer: "ok" });
+  });
+
+  it.each([
+    ["invalid JSON", output("not json"), "not valid JSON"],
+    ["schema-invalid JSON", output('{"answer":3}'), "did not match the required schema"],
+    ["truncated JSON", output('{"answer":"incomplete"}', "length"), "stopped with length"],
+  ])("reports %s and recovers on the bounded retry", async (_label, first, expectedPrompt) => {
+    const provider = new ScriptedProvider([first, output('{"answer":"recovered"}')]);
+    await expect(askModelJson(provider, "Return an answer.", "request", schema)).resolves.toEqual({ answer: "recovered" });
+    expect(provider.calls[1]?.messages.at(-1)?.content).toContain(expectedPrompt);
+  });
+
+  it("surfaces provider failures and failures after both attempts", async () => {
+    const providerFailure: Provider = {
+      name: "vertex",
+      chat: vi.fn().mockRejectedValue(new Error("provider unavailable")),
+    };
+    await expect(askModelJson(providerFailure, "Return an answer.", "request", schema)).rejects.toThrow("provider unavailable");
+    const invalid = new ScriptedProvider([output("not json"), output("still not json")]);
+    await expect(askModelJson(invalid, "Return an answer.", "request", schema)).rejects.toThrow("after retry: the response was not valid JSON");
   });
 });
 

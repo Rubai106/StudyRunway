@@ -81,6 +81,23 @@ clarifying question it asks.
 
 ## Judge-ready Funding Risk Agent (deterministic-first)
 
+### Structured funding details
+
+The Chat view also provides **Enter funding details**, an additive structured
+form for multiple tuition/living costs and multiple savings, scholarship,
+family, loan, or other funding sources. Each row retains its own amount,
+currency, deadline, frequency, and availability status. Submission goes
+directly to the validated `/api/agent/funding-check` route and the existing
+deterministic forecast engine; it does not ask the model to parse financial
+JSON and it never performs a transfer. Confirmed money, future confirmed
+funding, and expected/unverified funding remain separate in the result.
+After the deterministic result is shown, the form can request a separate
+server-side explanation from the configured hosted Google Gemini/Vertex-Gemini
+provider. The explanation receives a server-recomputed calculation summary,
+cannot modify the result or trigger actions, and can be retried without
+re-entering the form; if Gemini is unavailable, the deterministic result stays
+visible.
+
 StudyRunway now connects three deterministic capabilities into one workflow:
 
 1. **Safe-to-Send** tuition decisioning (`READY_TO_SIMULATE`, `RISK_DETECTED`, `MORE_INFORMATION_REQUIRED`, `BLOCKED`)

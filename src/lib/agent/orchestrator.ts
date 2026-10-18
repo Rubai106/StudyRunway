@@ -46,6 +46,7 @@ import { toJsonSchema } from "../providers/zodjson";
 import { HttpError } from "../providers/http";
 import type { Provider, ChatMessage, ToolSchema } from "../providers/types";
 import { CURRENCIES, isSupportedCurrency } from "../currency";
+import { SAMPLE_BUDGET_MESSAGE, SAMPLE_SAFE_TO_SEND_MESSAGE } from "../demo";
 import { extractExplicitMoneyMentions } from "../currencyText";
 import { toMinor } from "../money";
 import { listDestinations } from "../livingCosts";
@@ -56,7 +57,7 @@ import {
   fundingGapInputFromPlan,
 } from "../tools/analyzeFundingGap";
 import { RESEARCH_POLICY_TOOL_TIMEOUT_MS } from "../tools/researchPolicy";
-import { ISO_DATE, todayISO } from "../model";
+import { ISO_DATE, resolveRelativeDateISO, todayISO } from "../model";
 
 // ---------------------------------------------------------------------------
 // Public event contract (mirrors the SSE shapes exactly).
@@ -101,6 +102,16 @@ const ATTACHED_DOCUMENT_EVIDENCE_MARKER = 'I\'ve attached the text of "uploaded 
 
 function isAttachedDocumentEvidence(text: string): boolean {
   return text.includes(ATTACHED_DOCUMENT_EVIDENCE_MARKER);
+}
+
+function hasVerifiedPolicyAnswer(result: ToolResult): boolean {
+  if (!result.data) return false;
+  const answer = result.data["answer"];
+  const sources = result.data["sources"];
+  const supportedClaims = result.data["supportedClaims"];
+  return typeof answer === "string" && answer.trim().length > 0 &&
+    Array.isArray(sources) && sources.length > 0 &&
+    Array.isArray(supportedClaims) && supportedClaims.length > 0;
 }
 
 function originalRequestForState(text: string): string {
@@ -941,7 +952,7 @@ function buildContextMessage(state: TaskState, userMessage: string): string {
  * Ask the model for a JSON object validated by `schema`. Retries once with a
  * correction prompt when the output is not valid JSON / fails validation.
  */
-async function askModelJson<T>(
+export async function askModelJson<T>(
   provider: Provider,
   systemExtra: string,
   user: string,
@@ -952,27 +963,59 @@ async function askModelJson<T>(
     { role: "system", content: `${SYSTEM_PROMPT}\n\n${systemExtra}` },
     { role: "user", content: sanitizeForModel(user) },
   ];
+  let failureReason = "unknown structured-output failure";
   for (let attempt = 0; attempt < 2; attempt++) {
     checkAbort(signal);
     const res = await provider.chat(base, [], { responseFormat: "json_object" });
-    const cleaned = res.text
-      .trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/, "");
+    const raw = res.text.trim();
+    const truncated = /^(?:length|max_tokens|truncated|incomplete)$/i.test(res.stopReason);
+    if (!raw) {
+      failureReason = truncated
+        ? `the provider stopped with ${res.stopReason} before returning JSON`
+        : "the provider returned an empty response";
+    } else if (truncated) {
+      failureReason = `the provider stopped with ${res.stopReason}; the JSON may be truncated`;
+    }
+    const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    const cleaned = fenced ? fenced[1].trim() : raw;
+    if (!raw || truncated) {
+      if (attempt === 0) {
+        base.push({
+          role: "user",
+          content: `The previous response failed because ${failureReason}. Reply again with one complete JSON object only, with no Markdown fence or prose.`,
+        });
+        continue;
+      }
+      break;
+    }
     try {
-      const parsed = schema.parse(JSON.parse(cleaned)) as T;
-      return parsed;
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(cleaned);
+      } catch {
+        failureReason = "the response was not valid JSON";
+        throw new Error(failureReason);
+      }
+      const parsed = schema.safeParse(decoded);
+      if (!parsed.success) {
+        failureReason = `the JSON did not match the required schema (${parsed.error.issues
+          .map((issue) => issue.path.join(".") || "root")
+          .slice(0, 4)
+          .join(", ")})`;
+        throw new Error(failureReason);
+      }
+      return parsed.data as T;
     } catch {
       if (attempt === 0) {
         base.push({
           role: "user",
           content:
-            "Your last reply was not valid JSON for the requested schema. Reply again with ONLY the JSON object, no prose.",
+            `Your last reply failed because ${failureReason}. Reply again with ONLY one JSON object matching the requested schema, with no prose or Markdown fence.`,
         });
       }
     }
   }
-  throw new Error("model did not return valid JSON after retry");
+  throw new Error(`model did not return valid JSON after retry: ${failureReason}`);
 }
 
 const UnderstandingJsonSchema = ModelUnderstandingSchema.extend({
@@ -1011,10 +1054,6 @@ export function pickComponent(toolNames: string[]): ResultComponent {
 // labelled; nothing here claims model reasoning.
 // ---------------------------------------------------------------------------
 
-function demo(text: string): string {
-  return `${DEMO_LABEL}: ${text}`;
-}
-
 /** Message patterns that trigger no-model demo scenarios directly. */
 const SAMPLE_BUDGET_INTENT = /sample student budget/i;
 const SAMPLE_SAFE_TO_SEND_INTENT = /safe.?to.?send tuition demo|safe.?to.?send/i;
@@ -1041,6 +1080,7 @@ async function* runDemoFlow(
   opts: Required<Pick<RunAgentOptions, "toolTimeoutMs" | "maxToolCalls">> &
     Pick<RunAgentOptions, "signal"> & { tools: ToolDefinition[] }
 ): AsyncGenerator<AgentEvent> {
+  const demo = (text: string): string => `${DEMO_LABEL}: ${text}`;
   const sessionId = state.sessionId;
   yield { type: "status", phase: "understanding" };
   checkAbort(opts.signal);
@@ -1351,6 +1391,7 @@ async function* runModelFlow(
    * step can recompute the call deterministically.
    */
   let latestToolData: Record<string, unknown> | undefined;
+  let policyResearchWasUnverified = false;
 
   const runSingleTool = async (
     tool: ToolDefinition,
@@ -1465,6 +1506,9 @@ async function* runModelFlow(
       }
       const exec = await executeToolCall(tool, effectiveArgs, ctx, opts.toolTimeoutMs);
       toolCallCount += 1;
+      if (tool.name === "research_policy" && exec.result.ok && !hasVerifiedPolicyAnswer(exec.result)) {
+        policyResearchWasUnverified = true;
+      }
       if (exec.result.ok) toolResults.push({ tool: tool.name, result: exec.result });
       const argsObj =
         typeof effectiveArgs === "object" && effectiveArgs !== null
@@ -1969,11 +2013,22 @@ async function* runModelFlow(
   // ---- OUTCOME -----------------------------------------------------------
   checkAbort(opts.signal);
   let closing = "";
+  const latestPolicyResult = [...toolResults].reverse().find((item) => item.tool === "research_policy");
+  const policyResearchFailed = policyResearchWasUnverified || Boolean(
+    latestPolicyResult && !hasVerifiedPolicyAnswer(latestPolicyResult.result),
+  );
+  const safeToSendResult = [...toolResults].reverse().find((item) => /safe_to_send/.test(item.tool));
   const verifiedGapResult = [...state.toolCalls]
     .reverse()
     .find((call) => call.ok && call.tool === "analyze_funding_gap" && !call.summary.startsWith("Recomputed "));
   if (verifiedGapResult) {
     closing = verifiedGapResult.summary;
+  } else if (policyResearchFailed) {
+    closing = "No verified policy answer is available. The official-source search returned no usable claim-level support. Retry the search or provide the institution or authority's official domain so it can be checked directly.";
+  } else if (safeToSendResult) {
+    // Safe-to-Send prose must come from the deterministic decision summary;
+    // a second model response could invent a date that is absent from the card.
+    closing = safeToSendResult.result.summary;
   } else {
     try {
       const res = await provider.chat(
@@ -2151,6 +2206,22 @@ async function* runAgentInternal(
 
     if (!provider) {
       yield* runDemoFlow(state, message || state.originalRequest, {
+        toolTimeoutMs,
+        maxToolCalls,
+        signal: opts.signal,
+        tools,
+      });
+      return;
+    }
+
+    // The two labelled intro actions are deterministic demonstrations, not
+    // natural-language requests. They must remain reliable even when a model
+    // provider is configured and returns malformed understanding/planning JSON.
+    const explicitDemoAction =
+      message.trim() === SAMPLE_BUDGET_MESSAGE ||
+      message.trim() === SAMPLE_SAFE_TO_SEND_MESSAGE;
+    if (explicitDemoAction) {
+      yield* runDemoFlow(state, message, {
         toolTimeoutMs,
         maxToolCalls,
         signal: opts.signal,
@@ -2356,9 +2427,31 @@ export function submitAnswers(
         return { ok: false, error: "Choose a supported currency from the provided options." };
       }
     }
+    let normalizedAnswers = answers;
+    const dateFields = q.kind === "date"
+      ? ["date"]
+      : q.kind === "form"
+        ? (q.fields ?? []).filter((field) => field.type === "date").map((field) => field.name)
+        : [];
+    if (dateFields.length > 0 && answers && typeof answers === "object" && !Array.isArray(answers)) {
+      const dateAnswers = { ...(answers as Record<string, unknown>) };
+      for (const field of dateFields) {
+        const raw = dateAnswers[field];
+        if (typeof raw !== "string" || !raw.trim()) continue;
+        const resolved = resolveRelativeDateISO(raw, todayISO(null), "UTC");
+        if (!resolved) {
+          return {
+            ok: false,
+            error: `${field} must be an ISO date or an unambiguous relative date such as tomorrow; reference date is UTC ${todayISO(null)}.`,
+          };
+        }
+        dateAnswers[field] = resolved;
+      }
+      normalizedAnswers = dateAnswers;
+    }
     const value = q.kind === "amount" || q.kind === "date"
-      ? JSON.stringify({ question: q.prompt, answer: answers ?? null })
-      : typeof answers === "string" ? answers : JSON.stringify(answers ?? null);
+      ? JSON.stringify({ question: q.prompt, answer: normalizedAnswers ?? null })
+      : typeof normalizedAnswers === "string" ? normalizedAnswers : JSON.stringify(normalizedAnswers ?? null);
     const remaining = state.pendingQuestions.filter((x) => x.id !== questionId);
     updateTask(sessionId, {
       pendingQuestions: remaining,

@@ -7,6 +7,7 @@
  * per-session keying in the store, one session cannot read or delete another's
  * state (unknown ids → 404, never a leak).
  */
+import { sessionPersistenceError } from "./state";
 
 export const SESSION_ID_MAX_LENGTH = 128;
 
@@ -61,10 +62,25 @@ export function requestOriginError(req: Request): string | null {
       ? new URL(`${protocol}//${host}`).origin
       : requestUrl.origin;
 
-    return originUrl.origin === requestOrigin
+    const isLoopback = (url: URL): boolean =>
+      url.protocol === "http:" &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "::1");
+    const requestOriginUrl = new URL(requestOrigin);
+    const sameOrigin = originUrl.origin === requestOrigin;
+    const localDevelopmentPair = isLoopback(originUrl) && isLoopback(requestOriginUrl);
+
+    return sameOrigin || localDevelopmentPair
       ? null
       : "origin not allowed for this request";
   } catch {
     return "origin not allowed for this request";
   }
+}
+
+/** Return a safe 503 instead of silently using process-local state in production. */
+export function sessionPersistenceResponse(): Response | null {
+  const error = sessionPersistenceError();
+  return error
+    ? Response.json({ error, code: "SESSION_PERSISTENCE_UNAVAILABLE" }, { status: 503 })
+    : null;
 }

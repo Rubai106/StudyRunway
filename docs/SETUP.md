@@ -38,6 +38,8 @@ Never commit `.env.local`; never put these in client code.
 | `XAI_API_KEY`, `XAI_BASE_URL`, `XAI_MODEL` | Optional xAI/Grok provider. |
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` | Optional OpenAI or OpenAI-compatible provider. `OPENAI_BASE_URL` now honours the environment variable. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Optional Anthropic/Claude provider. |
+| `STUDYRUNWAY_SESSION_STORE` | Session-store selector. `memory` is for local/dev only; production requires a supported shared adapter. The current build does not bundle a Firestore adapter and fails closed when production persistence is unavailable. |
+| `STUDYRUNWAY_DEMO_MODE` | Set `true` only for an explicitly labelled demo deployment that accepts process-local in-memory sessions. It is not a durability or identity guarantee. |
 
 If `AI_PROVIDER` is set to a valid provider, StudyRunway uses only that provider; set it to `demo` to disable external model calls (as the browser tests do). It does not silently fall back to another configured provider. Without `AI_PROVIDER`, selection priority is xAI → Vertex AI → Gemini → OpenAI → Anthropic → demo mode. The header badge and `/api/agent/status` show the active provider honestly. The application does not silently fall back to another configured provider when `AI_PROVIDER` explicitly selects a provider that is missing required configuration.
 
@@ -111,10 +113,42 @@ real thing: configure one provider in `.env.local` (for Vertex AI, set the proje
 No provider key, no network calls, and no account are needed for any of
 the above.
 
+### Structured funding details
+
+In Chat, open **Enter funding details** to enter multiple costs and funding
+sources with their own currencies, dates, schedules, and certainty status.
+**Calculate funding readiness** calls `/api/agent/funding-check`, which validates
+the payload on the server and runs the existing deterministic
+`analyze_funding_gap`/forecast engine directly. It does not send the form
+through the model, persist a second plan, or perform a payment. Different
+currencies remain incomplete unless an explicit FX assumption exists; expected
+or unverified funding is shown separately from money available now.
+The deterministic result is displayed first. The client then calls
+`/api/agent/funding-analysis`, which server-recomputes the result and asks the
+configured hosted Google Gemini/Vertex-Gemini provider for an explanation only.
+Provider failure leaves the deterministic result visible and enables retry;
+the AI response cannot modify calculations or trigger protected actions.
+
 If you restart the server, its in-memory task state is reset. The client now
 checks whether a restored transcript still has a live server-side session and
 starts fresh with a clear notice when that state has expired, instead of leaving
 clarification or approval buttons that can only return `unknown session`.
+
+### Cloud Run session continuity
+
+Cloud Run instance affinity is not durable storage. Pending clarifications,
+confirmed facts, approvals, Safe-to-Send decisions, simulation receipts, and
+duplicate-prevention records must be stored in a shared transactional store
+before this application can safely serve stateful production workflows.
+
+This repository exposes a typed local `TaskStore` interface and fails
+stateful production routes with HTTP 503 unless a shared adapter is installed.
+It does not claim Firestore persistence yet. A production rollout must install
+and review a Firestore (or equivalent transactional store) adapter, grant the
+Cloud Run service identity least-privilege access, set
+`STUDYRUNWAY_SESSION_STORE` to that adapter, and add restart/concurrency tests
+before enabling it. Set `STUDYRUNWAY_DEMO_MODE=true` only when the deployment
+is intentionally demo-only and can tolerate instance-local state.
 
 ## Test commands
 
@@ -154,7 +188,7 @@ and address anything actionable. The build already pins `next@15.5.28` +
 - `src/lib/livingCosts/` — the destination budget engine (`dataset`,
   `engine`, `recommendations`, `toObligations`) + unit tests
 - `src/lib/budgetApply.ts` — apply/revert logic for accepted budgets
-- `src/app/api/agent/` — `chat` (SSE), `answer` (clarification/approval resume), `status` (provider indicator), `session-status`, `budget-apply`, `budget-revert`
+- `src/app/api/agent/` — `chat` (SSE), `answer` (clarification/approval resume), `status` (provider indicator), `session-status`, `funding-check` (structured deterministic funding form), `funding-analysis` (server-side hosted Gemini explanation), `budget-apply`, `budget-revert`
 - `src/lib/` — the deterministic financial engine (`money`, `forecast`, `transfers`, `scenarios`, `extract`, `evidence`, `export`, `model`, `currency`, `sample`)
 - `src/components/chat/` — chat UI; `src/components/results/` — result cards; `src/components/visualizer/` — 3D tool visualizer
 - `src/app/visualizer-demo/` — internal harness replaying real events through the real event bus (E2E only)

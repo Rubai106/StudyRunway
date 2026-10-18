@@ -6,12 +6,14 @@
  * restart, so stale transcripts must not present live clarification/apply controls.
  */
 import { getTask } from "@/lib/agent/state";
-import { sessionIdError } from "@/lib/agent/session";
+import { sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(req: Request): Promise<Response> {
+  const persistenceError = sessionPersistenceResponse();
+  if (persistenceError) return persistenceError;
   const sessionId = new URL(req.url).searchParams.get("sessionId");
   const error = sessionIdError(sessionId);
   if (error) return Response.json({ active: false, error }, { status: 400 });

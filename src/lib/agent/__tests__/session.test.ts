@@ -73,6 +73,15 @@ describe("request origin validation", () => {
       headers: { origin: "http://localhost" },
     }))).toBeNull();
     expect(requestOriginError(new Request("http://localhost/api/agent/chat", {
+      headers: { origin: "http://127.0.0.1" },
+    }))).toBeNull();
+    expect(requestOriginError(new Request("http://127.0.0.1/api/agent/chat", {
+      headers: { origin: "http://localhost" },
+    }))).toBeNull();
+    expect(requestOriginError(new Request("http://localhost/api/agent/chat", {
+      headers: { origin: "https://studyrunway-agent-dnwlfigpsa-el.a.run.app" },
+    }))).toMatch(/origin not allowed/i);
+    expect(requestOriginError(new Request("http://localhost/api/agent/chat", {
       headers: { origin: "https://attacker.example" },
     }))).toMatch(/origin not allowed/i);
     expect(requestOriginError(new Request("http://localhost/api/agent/chat", {

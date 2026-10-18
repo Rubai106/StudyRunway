@@ -3,6 +3,10 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 90_000,
+  // The demo server compiles route bundles on demand. Keep browser pressure
+  // bounded so concurrent workers cannot exhaust local resources and turn an
+  // HMR-chunk load failure into a false product regression.
+  workers: 2,
   use: {
     baseURL: "http://localhost:3100",
   },
