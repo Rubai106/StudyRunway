@@ -162,13 +162,22 @@ export async function POST(req: Request): Promise<Response> {
 
   const sourceCurrency = text(quote["sourceCurrency"])?.toUpperCase();
   const targetCurrency = text(quote["targetCurrency"])?.toUpperCase();
-  const sourceAmount = numeric(quote["sourceAmount"]);
-  const targetAmount = numeric(quote["targetAmount"]);
-  const rate = numeric(quote["rate"]);
+  const rawOptions = Array.isArray(quote["paymentOptions"]) ? quote["paymentOptions"] : [];
+  const enabledOptions = rawOptions
+    .map(record)
+    .filter((option): option is Record<string, unknown> => option !== null && option["disabled"] !== true);
+  const fallbackOption = enabledOptions[0];
+  const sourceAmount = numeric(quote["sourceAmount"])
+    ?? numeric(fallbackOption?.["sourceAmount"])
+    ?? parsed.data.sourceAmount;
+  const targetAmount = numeric(quote["targetAmount"])
+    ?? numeric(fallbackOption?.["targetAmount"]);
+  const rate = numeric(quote["rate"])
+    ?? numeric(fallbackOption?.["rate"]);
   if (
     sourceCurrency !== parsed.data.sourceCurrency ||
     targetCurrency !== parsed.data.targetCurrency ||
-    sourceAmount == null || sourceAmount <= 0 ||
+    sourceAmount <= 0 ||
     targetAmount == null || targetAmount <= 0 ||
     rate == null || rate <= 0
   ) {
@@ -176,7 +185,6 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const checkedAt = new Date().toISOString();
-  const rawOptions = Array.isArray(quote["paymentOptions"]) ? quote["paymentOptions"] : [];
   const options = rawOptions.flatMap((value, index) => {
     const option = record(value);
     if (!option || option["disabled"] === true) return [];
