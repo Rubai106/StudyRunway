@@ -89,6 +89,14 @@ describe("POST /api/agent/budget-apply", () => {
     expect(getTask("route-session")!.workingPlan).toBeNull();
   });
 
+  it("rejects a wrong (not merely missing) approvalAck value without mutating state", async () => {
+    const res = await post(applyPOST, applyBody({ approvalAck: "I_APPROVE_SOMETHING_ELSE" }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/explicit approval is required/i);
+    expect(getTask("route-session")!.workingPlan).toBeNull();
+    expect(getTask("route-session")!.appliedBudget).toBeNull();
+  });
+
   it("rejects unknown sessions with a clear error", async () => {
     const res = await post(applyPOST, applyBody({ sessionId: "ghost-session" }));
     expect(res.status).toBe(400);
