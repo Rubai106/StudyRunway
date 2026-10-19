@@ -128,9 +128,7 @@ bottom are the ones we knowingly ship with.
   (Windows RCE), GHSA-2464-fhr4-w9xw (image SVG RCE), GHSA-p3m5-59mp-jv5r
   (server-action DoS), and the React2Shell RCE chain (CVE-2025-66478,
   CVE-2025-55183/55184) that affected the scaffolded 15.3.4.
-- `npm audit` could **not** be completed for this patched source: npm registry
-  DNS resolution failed with `EAI_AGAIN registry.npmjs.org`. It must be run
-  after registry access is restored; see `TEST_RESULTS.md` and `SETUP.md`.
+- **Historical audit note — earlier candidate/run (superseded by §14):** `npm audit` could not be completed for that earlier source because registry DNS resolution failed with `EAI_AGAIN registry.npmjs.org`. This is not the current Windows audit result; see §14 for the October 19, 2026 findings.
 
 ## 10. What the budget-planner phase fixed (2026-10-15)
 
@@ -221,9 +219,98 @@ bottom are the ones we knowingly ship with.
    shared fallback bucket is used. There is still no distributed enforcement.
    Do not rely on it in production.
 
-7. **Dependency audit status is unresolved for this run.** Both `npm audit`
-   and `npm audit --omit=dev` failed at npm's registry audit endpoint before
-   returning advisory data. No dependency update or clearance claim is made.
+7. **Earlier sandbox audit status (superseded by §14).** In that earlier run, both `npm audit` and `npm audit --omit=dev` failed at npm's registry audit endpoint before returning advisory data. That was an environment limitation at the time, not the current Windows audit result. Section 14 records the current result: 15 findings in the full audit and zero reported by the production-only audit. No dependency update or full dependency-security clearance is claimed.
+
+## 12. Approval acknowledgments — what they are and are not (2026-10-19)
+
+- `BUDGET_ACTION_ACKS` (`I_APPROVE_BUDGET_APPLY` / `I_APPROVE_BUDGET_REVERT`,
+  `src/lib/budgetApproval.ts`) and `SAFE_TO_SEND_ACTION_ACKS`
+  (`I_APPROVE_SIMULATION` / `I_CONFIRM_FUNDING_RECEIPT` /
+  `I_APPROVE_SIMULATION_REVERT`, `src/lib/tools/safeToSendApproval.ts`) are
+  **fixed, client-visible string constants**. They are imported by client UI
+  components (`LivingCostPlan.tsx`, `SafeToSendDecision.tsx`) and therefore
+  shipped in the browser bundle; anyone can read or replay them from devtools.
+- The server requires the expected acknowledgment value for approval-gated
+  actions. This rejects requests with a missing or incorrect acknowledgment,
+  but the value is a fixed public string and can be replayed by a caller who
+  knows it. It does not prove that a user clicked the confirmation button,
+  authenticate a user, or provide strong transaction authorization.
+  Request-origin validation is a separate CSRF mitigation, not authentication.
+- Four distinct layers must not be conflated:
+  1. **Acknowledgment presence check** — the request carries the expected
+     fixed string. Rejects missing/wrong values; replayable by anyone who
+     knows the string.
+  2. **Request-origin check** (`requestOriginError`) — a CSRF mitigation, not
+     authentication. It does **not** require an `Origin` header: requests
+     without one are allowed (the implementation returns no error when the
+     header is absent). Only when a caller supplies an `Origin` header must
+     it match the request origin (403 otherwise). This blocks certain
+     cross-site browser submissions while leaving headerless callers
+     (curl, tests, non-browser clients) unaffected — which is precisely why
+     it cannot serve as authentication or authorization.
+  3. **Server-side business-rule validation and integrity checks** — the
+     actual tamper protection, independent of the ack string: budget-apply
+     re-runs the deterministic engine from `planInputs` and rejects any
+     amount/label/source mismatch with exact minor-unit equality
+     (`verifyPlanIntegrity`); Safe-to-Send recomputes the decision and
+     rejects when the `decisionId` hash or any expected field (amounts,
+     currencies, due date) differs, and refuses duplicate or stale
+     approvals.
+  4. **Authentication and authorization** — absent in this build. The ack
+     strings provide neither.
+- The route-level tests added 2026-10-19 cover layers 1 and 3 (wrong ack
+  value; tampered approval fields; stale approval after draft change; reused
+  approval; non-ready decision state). Each asserts the rejected request
+  leaves financial state unchanged: no applied simulation obligation, no
+  change to existing obligations, no new applied record. Rejected attempts
+  may still appear as audit-logged `status: "rejected"` records with a
+  rejection event and blocked workflow stage — that is intentional
+  rejection evidence, not a successful application.
+
+## 13. Demo protections vs production requirements (2026-10-19)
+
+The controls in §§1–10, 12 are **demo-grade** and are sufficient for a
+controlled competition demo with a cooperative user. They are **not**
+production controls. Before any real-user launch, the following are required
+and are currently absent:
+
+| Demo protection (present) | Production requirement (absent) |
+|---|---|
+| Fixed client-visible ack strings (§12) | Authenticated sessions; per-user ownership of state; signed or server-issued approval tokens bound to the exact transaction |
+| Client-supplied UUID session IDs + origin check | Real authentication; server-side session binding to an authenticated principal |
+| In-memory per-process rate-limit buckets | Distributed rate limiting (Redis or gateway-level) |
+| In-memory task state (lost on restart) | Durable, access-controlled per-user storage |
+| Stdout JSON audit lines | Tamper-evident, retained audit store with access controls |
+| Pattern-based document-injection screening | Semantic/additional-layer injection defenses for untrusted content |
+
+## 14. Dependency audit status — Windows verification (2026-10-19)
+
+- **Full dependency audit (`npm audit`):** 15 vulnerabilities reported — 1 moderate, 12 high, and 2 critical.
+- **Production-only dependency audit (`npm audit --omit=dev`):** zero vulnerabilities reported (`found 0 vulnerabilities`).
+- The full audit includes findings involving `@vitest/mocker`, `vitest`, `tinypool`, and `braces` through development/build-tool dependency paths.
+- npm's suggested automatic remediation would require `--force` and potentially breaking major-version upgrades, including Vitest 5 and Tailwind CSS 4. No forced upgrade was applied.
+- **Dependency security is not cleared.** The production-only result is encouraging, but it does not establish that the entire application is secure.
+- This Windows run supersedes earlier audit-blocked and 21-finding reports for the current tree. Those earlier reports remain historical observations from previous runs or dependency trees.
+- Review compatible fixes separately, and rerun the full verification suite after dependency changes. Do not run `npm audit fix --force`.
+
+## 15. Verification evidence for this pass (2026-10-19)
+
+All checks below were run on the patched working tree
+(commit `4df0fbf` + the 4-file patch, including the §12 wording correction and
+the revised test names/invariants). Results are consistent with the
+"Security-evidence pass — 2026-10-19" section in `docs/TEST_RESULTS.md`;
+earlier PENDING placeholders have been replaced with the actual outcomes.
+
+| Check | Result | Evidence |
+|---|---|---|
+| `npm ci` | PASSED | exit 0 |
+| `npm run typecheck` | PASSED | exit 0, zero errors |
+| `npm run lint` | PASSED | exit 0, zero problems |
+| `npm test` | PASSED | **37 files, 378/378 tests**, exit 0 — includes 6 new approval-boundary tests (1 budget-apply wrong-ack; 5 safe-to-send route: wrong ack, tampered fields, stale approval, reused approval, non-ready state) |
+| `npm run build` | PASSED | exit 0, all routes emitted |
+| `npm run e2e` | PASSED | **64/64 tests**, exit 0, ~2.0 min |
+| `npm audit` | FINDINGS — NOT CLEARED | 15 vulnerabilities: 1 moderate, 12 high, 2 critical; current Windows audit, 2026-10-19 |
+| `npm audit --omit=dev` | PASSED — zero vulnerabilities reported | Actual output: `found 0 vulnerabilities`, Windows audit, 2026-10-19 |
 
 This assessment claims no production readiness and no certification. No
 payments, banking credentials, live transfer provider, or outbound email

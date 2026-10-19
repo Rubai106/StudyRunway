@@ -267,3 +267,60 @@ historical reports above remain unchanged.
 | `npm run e2e` | BLOCKED — ENVIRONMENT | Existing process occupied port 3100 (`EADDRINUSE`); no test assertions ran. |
 | `npm audit` / `npm audit --omit=dev` | BLOCKED — ENVIRONMENT | npm registry audit endpoint failed before returning advisory data. |
 | Live Gemini, Vertex, Wise, deployment | NOT RUN | Automated tests use mocks/local deterministic paths. |
+## Security-evidence pass — 2026-10-19 (current tree, commit 4df0fbf)
+
+This section records the focused security-evidence pass on the current tree.
+It supersedes earlier verification and audit-status statements for this tree
+where they conflict with the Windows results below. Earlier entries describe
+different candidates or earlier runs and remain historical.
+
+| Check | Exact action | Result | Evidence / limitation |
+|---|---|---|---|
+| Install | `npm ci` | PASSED | exit 0 |
+| Typecheck | `npm run typecheck` (`tsc --noEmit`) | PASSED | exit 0, zero errors |
+| Lint | `npm run lint` (`eslint .`) | PASSED | exit 0, zero problems |
+| Unit tests | `npm test` (`vitest run`) | PASSED | **37 files, 378/378 tests**, exit 0 |
+| Production build | `npm run build` (`next build`) | PASSED | exit 0 |
+| E2E | `npm run e2e` (`playwright test`) | PASSED | **64/64 tests**, exit 0, ~2.0 min |
+| `npm audit` | `npm audit` | FINDINGS — NOT CLEARED | 15 vulnerabilities: 1 moderate, 12 high, 2 critical; current Windows tree, 2026-10-19 |
+| `npm audit --omit=dev` | `npm audit --omit=dev` | PASSED — zero vulnerabilities reported | Actual output: `found 0 vulnerabilities`, Windows tree, 2026-10-19 |
+
+### New tests added in this pass (6)
+
+- `src/app/api/agent/budget-apply/route.test.ts`: rejects a **wrong** (not
+  merely missing) `approvalAck` value with 400 and asserts `workingPlan` and
+  `appliedBudget` remain null.
+- `src/app/api/agent/safe-to-send/route.test.ts` (new describe block
+  "approval-boundary hardening", 5 tests): wrong approvalAck value; tampered
+  `simulationApproval` fields; stale approval after draft inputs change;
+  reused approval on duplicate simulate; simulate when decision is not
+  `READY_TO_SIMULATE`. Each negative-path test captures a deep snapshot of
+  the session's financial obligations before the request and asserts it is
+  unchanged afterward, asserts no new `sts-pay-` simulation obligation was
+  created, and asserts the count of `safeToSend.records` with
+  `status === "applied"` is unchanged (exactly one for the replay test, where
+  the first legitimate application is established). Note: rejected attempts
+  are intentionally audit-logged as `status: "rejected"` records — the tests
+  assert on applied obligations and applied records, not on record absence.
+
+### Reconciliation notes
+
+- The 2026-10-18 summary reported 370 tests; this tree has 378 (the 6 new
+  tests plus 2 from intervening commits). The current Windows audit on
+  2026-10-19 reports 15 vulnerabilities (1 moderate, 12 high, 2 critical);
+  `npm audit --omit=dev` reports zero vulnerabilities. The full dependency
+  tree is **not cleared**. Do not use `npm audit fix --force`.
+
+- No test outcomes in this section are invented: every PASSED row above was
+  executed in this environment on 2026-10-19 with the exit codes shown.
+- The final patch revises the same pass: the security assessment's §12 now
+  uses the corrected acknowledgment wording (fixed public strings do not prove
+  a button click, authenticate, or authorize) and correctly documents that
+  `requestOriginError` permits requests without an `Origin` header (only a
+  supplied mismatched origin is rejected), the tampered-fields test is
+  named "without applying a simulation" (rejected-attempt audit records are
+  permitted), the negative-path tests additionally assert the
+  `status === "applied"` simulation-record count is unchanged (exactly one
+  for the replay test), and §15's build/E2E placeholders are replaced with
+  the verified PASSED outcomes recorded above. All 378 tests and 64 E2E were
+  re-run after these wording changes.
