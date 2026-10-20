@@ -15,7 +15,7 @@ import Dashboard from "../dashboard/Dashboard";
 import ResultCard from "../results";
 import { SignOutButton } from "../auth/GoogleSignIn";
 import { setUserStorageScope } from "@/lib/userStorage";
-import { getExamples, isLanguageCode, responseLanguageInstruction, SUPPORTED_LANGUAGES, translate, type LanguageCode } from "@/lib/multilingual";
+import { getExamples, isLanguageCode, SUPPORTED_LANGUAGES, translate, type LanguageCode } from "@/lib/multilingual";
 import {
   clearLastSession,
   filterPersistableResults,
@@ -381,7 +381,7 @@ function ChatWorkspaceContent() {
         const res = await fetch("/api/agent/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, message: trimmed ? `${trimmed}\n\n${responseLanguageInstruction(language)}` : trimmed }),
+          body: JSON.stringify({ sessionId, message: trimmed, language }),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
