@@ -42,7 +42,7 @@ const english = {
   languageHelp: "Choose the language for the assistant's replies and supported chat controls.",
 } as const;
 
-type TranslationKey = keyof typeof english;
+export type TranslationKey = keyof typeof english;
 
 const translations: Record<LanguageCode, Record<TranslationKey, string>> = {
   en: english,
@@ -179,8 +179,6 @@ const translations: Record<LanguageCode, Record<TranslationKey, string>> = {
     languageHelp: "Elige el idioma de las respuestas del asistente y los controles de chat compatibles.",
   },
 };
-
-export type TranslationKey = keyof typeof english;
 
 export function translate(language: LanguageCode, key: TranslationKey): string {
   return translations[language]?.[key] ?? english[key];
