@@ -1,13 +1,20 @@
 import { test, expect, type Page } from "@playwright/test";
 
 /** Open responsive navigation before selecting Chat on narrow screens. */
+/** Open responsive navigation before selecting Chat on narrow screens. */
 async function clickChatNavigation(page: Page) {
-  const menuButton = page.getByRole("button", { name: "Open navigation menu" });
-  if (await menuButton.isVisible().catch(() => false)) {
-    await menuButton.click();
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    const menuButton = page.getByRole("button", { name: "Open navigation menu" });
+    await expect(menuButton).toBeVisible({ timeout: 15_000 });
+    if ((await menuButton.getAttribute("aria-expanded")) !== "true") {
+      await menuButton.click();
+    }
   }
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+  await expect(chatButton).toBeVisible({ timeout: 15_000 });
+  await chatButton.click();
 }
+
 
 test("structured funding form submits multiple financial records to the real forecast", async ({ page }) => {
   await page.goto("/");

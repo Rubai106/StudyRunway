@@ -122,13 +122,20 @@ async function sendMessage(page: Page, text: string) {
 }
 
 /** Open responsive navigation before selecting Chat on narrow screens. */
+/** Open responsive navigation before selecting Chat on narrow screens. */
 async function clickChatNavigation(page: Page) {
-  const menuButton = page.getByRole("button", { name: "Open navigation menu" });
-  if (await menuButton.isVisible().catch(() => false)) {
-    await menuButton.click();
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    const menuButton = page.getByRole("button", { name: "Open navigation menu" });
+    await expect(menuButton).toBeVisible({ timeout: 15_000 });
+    if ((await menuButton.getAttribute("aria-expanded")) !== "true") {
+      await menuButton.click();
+    }
   }
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+  await expect(chatButton).toBeVisible({ timeout: 15_000 });
+  await chatButton.click();
 }
+
 
 async function openChat(page: Page) {
   await page.goto("/");
