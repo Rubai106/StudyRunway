@@ -184,9 +184,9 @@ test("quick reply resumes the task via /api/agent/answer", async ({ page }) => {
 
 test("form validation blocks bad amount input", async ({ page }) => {
   test.skip(LIVE, "mocked API");
-  await page
-    .getByRole("button", { name: /scholarship may arrive late/i })
-    .click();
+  // The preceding global setup navigates directly to Chat, but this
+  // validation test needs the explicit deterministic clarification scenario.
+  await page.getByRole("button", { name: /scholarship may arrive late/i }).click();
   const termAnswer = page.getByRole("button", { name: "Answer: Fall" });
   await expect(termAnswer).toBeVisible({ timeout: 15000 });
   await termAnswer.click();
