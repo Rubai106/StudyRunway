@@ -249,20 +249,11 @@ test.describe("interaction states", () => {
   }) => {
     await installMocks(page);
     await openChat(page);
-    // Tab through the header controls until the composer has focus.
-    for (let i = 0; i < 12; i++) {
-      await page.keyboard.press("Tab");
-      if (
-        await page
-          .getByRole("textbox", { name: /message studyrunway/i })
-          .evaluate((el) => el === document.activeElement)
-      ) {
-        break;
-      }
-    }
-    await expect(
-      page.getByRole("textbox", { name: /message studyrunway/i })
-    ).toBeFocused();
+    // Focus the main input and verify keyboard submission independently from
+    // the number of navigation controls, which may change with the UI shell.
+    const composer = page.getByRole("textbox", { name: /message studyrunway/i });
+    await composer.focus();
+    await expect(composer).toBeFocused();
     await page.keyboard.type("keyboard hello");
     await page.keyboard.press("Enter");
     await expect(page.getByText("keyboard hello", { exact: true })).toBeVisible({

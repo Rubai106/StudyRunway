@@ -46,12 +46,19 @@ async function installMocks(page: Page) {
     expect(body.sessionId, "chat posts a sessionId").toBeTruthy();
     expect(typeof body.message, "chat posts a message string").toBe("string");
 
-    const slow = (body.message ?? "").includes("SLOW-STREAM");    const events: string[] = [
+    const message = body.message ?? "";
+    const formValidation = message.includes("FORM-VALIDATION");
+    const slow = message.includes("SLOW-STREAM");
+    const events: string[] = [
       `data: {"type":"status","phase":"planning"}`,
       `data: {"type":"assistant_text","text":"Here's what I found. "}`,
       `data: {"type":"tool_call_start","id":"t1","tool":"compare_transfers","label":"Comparing transfer quotes"}`,
       `data: {"type":"tool_call_end","id":"t1","tool":"compare_transfers","ok":true,"summary":"3 quotes compared","durationMs":120}`,
-      `data: {"type":"clarify","questions":[{"id":"q-term","kind":"quick_replies","prompt":"Which term is this for?","options":["Fall","Spring"]}]}`,
+      ...(!formValidation
+        ? [
+            `data: {"type":"clarify","questions":[{"id":"q-term","kind":"quick_replies","prompt":"Which term is this for?","options":["Fall","Spring"]}]}`,
+          ]
+        : []),
       `data: {"type":"clarify","questions":[{"id":"q-amount","kind":"amount","prompt":"How much do you need to send?","options":["EUR","GBP","USD"]}]}`,
     ];
     if (slow) {
@@ -184,27 +191,29 @@ test("quick reply resumes the task via /api/agent/answer", async ({ page }) => {
 
 test("form validation blocks bad amount input", async ({ page }) => {
   test.skip(LIVE, "mocked API");
-  await page
-    .getByRole("button", { name: /scholarship may arrive late/i })
-    .click();
-  const termAnswer = page.getByRole("button", { name: "Answer: Fall" });
-  await expect(termAnswer).toBeVisible({ timeout: 15000 });
-  await termAnswer.click();
+  // Use a deterministic mock response with only the amount form so this
+  // test targets amount validation without depending on a multi-turn flow.
+  const composer = page.getByRole("textbox", { name: /message studyrunway/i });
+  await composer.fill("FORM-VALIDATION please");
+  await composer.press("Enter");
 
-  const amountInput = page.locator('input[type="number"]').first();
+  const amountForm = page.getByTestId("clarify-amount");
+  const amountInput = amountForm.locator('input[type="number"]');
   await expect(amountInput).toBeVisible({ timeout: 15000 });
   await amountInput.fill("-50");
-  await page.getByRole("button", { name: "Submit", exact: true }).first().click();
-  await expect(page.getByText("Enter a positive number.")).toBeVisible();
+  await amountForm.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(amountForm.getByText("Enter a positive number.")).toBeVisible();
   // No answer request should have been sent for the invalid submission.
   await page.waitForTimeout(500);
   // Fix it: valid amount + currency passes validation and posts.
   await amountInput.fill("3000");
-  await page.locator("select").first().selectOption("EUR");
+  // The multilingual header has its own select, so scope currency selection
+  // to the clarification form rather than assuming it's the first page select.
+  await amountForm.locator("select").selectOption("EUR");
   const answerRequest = page.waitForRequest((req) =>
     req.url().includes("/api/agent/answer"),
   );
-  await page.getByRole("button", { name: "Submit", exact: true }).first().click();
+  await amountForm.getByRole("button", { name: "Submit", exact: true }).click();
   const req = await answerRequest;
   const payload = req.postDataJSON() as {
     questionId?: string;

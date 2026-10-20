@@ -178,9 +178,11 @@ function confirmedAnswersAsFinancialText(facts: TaskState["confirmedFacts"]): st
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
     const record = parsed as Record<string, unknown>;
     if (fact.key === "transfer-details") {
+      // Form clarifications are stored as a plain object; older scalar
+      // clarifications and some callers use the { question, answer } envelope.
       const answer = record.answer && typeof record.answer === "object" && !Array.isArray(record.answer)
         ? record.answer as Record<string, unknown>
-        : null;
+        : record;
       const amount = typeof answer?.sendAmount === "number"
         ? answer.sendAmount
         : typeof answer?.sendAmount === "string"
@@ -461,9 +463,11 @@ function confirmedTransferComparisonArgs(
   if (!fact) return null;
   try {
     const outer = JSON.parse(fact.value) as Record<string, unknown>;
+    // submitAnswers stores form answers directly, while legacy callers may
+    // supply the same fields inside an { answer } envelope.
     const answer = outer["answer"] && typeof outer["answer"] === "object" && !Array.isArray(outer["answer"])
       ? outer["answer"] as Record<string, unknown>
-      : null;
+      : outer;
     if (!answer) return null;
     const amount = typeof answer["sendAmount"] === "number"
       ? answer["sendAmount"]
