@@ -74,13 +74,23 @@ function expectNoConsoleErrors(errors: string[]) {
   );
 }
 
+/** Open responsive navigation before selecting Chat on narrow screens. */
+async function clickChatNavigation(page: Page) {
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    const menuButton = page.getByRole("button", { name: "Open navigation menu" });
+    await expect(menuButton).toBeVisible({ timeout: 15_000 });
+    if ((await menuButton.getAttribute("aria-expanded")) !== "true") {
+      await menuButton.click();
+    }
+  }
+  const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+  await expect(chatButton).toBeVisible({ timeout: 15_000 });
+  await chatButton.click();
+}
+
 async function openChat(page: Page) {
   await page.goto("/");
-  const chat = page.getByRole("button", { name: "Chat", exact: true });
-  if ((page.viewportSize()?.width ?? 1280) < 768) {
-    await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
-  }
-  await chat.click();
+  await clickChatNavigation(page);
 }
 
 /** Click the welcome-screen demo button and wait for the budget card. */

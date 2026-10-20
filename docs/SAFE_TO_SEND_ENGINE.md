@@ -97,8 +97,15 @@ via `POST /api/agent/safe-to-send` actions and the `SafeToSendDecision` result c
 Delay and recovery scenarios remain available through the existing student-finance
 crisis planner and are intentionally not duplicated in this workflow.
 
-## Storage limitation
+## Storage and deployment boundary
 
-State and audit records are stored in the existing in-memory session store (`TaskState.safeToSend`).
+Safe-to-Send state is part of the agent task state. Local development uses the
+process-local in-memory store by default. The configured Cloud Run deployment
+uses the Firestore session store; the runtime validates restored state and uses
+Firestore update-time preconditions to reject conflicting writes. If Firestore
+is unavailable, stateful production routes fail closed.
 
-This is process-local sandbox storage and is not durable across server restarts or shared across instances.
+Browser-only data (transcripts, reminders, budgets and preferences) remains in
+account-namespaced local storage and is not synced across devices. These storage
+facts do not make the workflow a payment service: the simulated action is a
+sandbox record only and no bank transfer is initiated.

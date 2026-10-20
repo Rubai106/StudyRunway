@@ -1,12 +1,23 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+/** Open responsive navigation before selecting Chat on narrow screens. */
+async function clickChatNavigation(page: Page) {
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    const menuButton = page.getByRole("button", { name: "Open navigation menu" });
+    await expect(menuButton).toBeVisible({ timeout: 15_000 });
+    if ((await menuButton.getAttribute("aria-expanded")) !== "true") {
+      await menuButton.click();
+    }
+  }
+  const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+  await expect(chatButton).toBeVisible({ timeout: 15_000 });
+  await chatButton.click();
+}
+
 
 async function openChat(page: import("@playwright/test").Page) {
   await page.goto("/");
-  const chat = page.getByRole("button", { name: "Chat", exact: true });
-  if ((page.viewportSize()?.width ?? 1280) < 768) {
-    await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
-  }
-  await chat.click();
+  await clickChatNavigation(page);
 }
 
 test("structured funding form submits multiple financial records to the real forecast", async ({ page }) => {
@@ -32,6 +43,7 @@ test("structured funding form submits multiple financial records to the real for
 
   await page.getByRole("button", { name: "Calculate funding readiness" }).click();
   await expect(page.getByRole("region", { name: "Financial outcome" })).toBeVisible();
+  await expect(page.getByText("Where the money comes from")).toBeVisible();
   await expect(page.getByText("Listed as confirmed and scheduled")).toBeVisible();
   await expect(page.getByText("Expected or unconfirmed")).toBeVisible();
   await expect(page.getByText(/AI explanation unavailable/)).toBeVisible();
@@ -51,5 +63,6 @@ test("renders a successful hosted-analysis response without replacing determinis
   await expect(page.getByRole("region", { name: "Financial outcome" })).toBeVisible();
   await expect(page.getByText("AI Financial Readiness Analysis")).toBeVisible();
   await expect(page.getByText(/Your deterministic result remains authoritative/)).toBeVisible();
+  await expect(page.getByText("Where the money comes from")).toBeVisible();
   await expect(page.getByText("Costs in this plan")).toBeVisible();
 });

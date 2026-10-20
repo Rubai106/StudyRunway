@@ -221,15 +221,15 @@ that the app had no login.
    prompt, the allow-list, and the approval gate — but a sufficiently clever
    instruction inside a document could still influence model *wording* (not
    tool execution).
-3. **In-memory server state and no authentication** mean task state is keyed by
-   a client-supplied UUID-like session identifier. IDs are random UUIDs in modern
-   browsers and origin checks mitigate browser CSRF, but the ID still acts as a
-   bearer identifier. If it is exposed or known, another caller could access the
-   matching state. Unknown IDs return 404; this is not user authentication and
-   is not acceptable for sensitive production data. Add authenticated ownership
-   and durable per-user storage before a real-user launch. Acceptable only for a
-   competition
-   demo, not for production.
+3. **Local development uses in-memory task state; Cloud Run uses authenticated
+   Firestore-backed task state.** Google OAuth sessions are required by the
+   hosted app routes, task IDs are HMAC-scoped to the authenticated identity,
+   and the configured Cloud Run runtime persists task state in Firestore. The
+   local development default is still process-local memory and does not survive
+   a process restart. Browser-only data remains local to the device. These
+   controls improve identity isolation and durability, but do not by themselves
+   establish production readiness for a financial service; review IAM, retention,
+   monitoring, backups and abuse controls as described in §13.
 4. **Policy research depends on Vertex and official-domain screening.** The
    implementation uses Vertex Google Search grounding, redacts common direct
    identifiers in the query, and withholds an answer unless cited pages pass
@@ -281,8 +281,9 @@ that the app had no login.
      rejects when the `decisionId` hash or any expected field (amounts,
      currencies, due date) differs, and refuses duplicate or stale
      approvals.
-  4. **Authentication and authorization** — absent in this build. The ack
-     strings provide neither.
+  4. **High-assurance transaction-level authorization for external actions is
+     not implemented.** Google OAuth now protects the hosted routes, but the
+     fixed ack strings still do not prove identity or authorize a specific real transaction.
 - The route-level tests added 2026-10-19 cover layers 1 and 3 (wrong ack
   value; tampered approval fields; stale approval after draft change; reused
   approval; non-ready decision state). Each asserts the rejected request
@@ -336,8 +337,21 @@ earlier PENDING placeholders have been replaced with the actual outcomes.
 | `npm audit` | FINDINGS — NOT CLEARED | 15 vulnerabilities: 1 moderate, 12 high, 2 critical; current Windows audit, 2026-10-19 |
 | `npm audit --omit=dev` | PASSED — zero vulnerabilities reported | Actual output: `found 0 vulnerabilities`, Windows audit, 2026-10-19 |
 
-This assessment claims no production readiness and no certification. No
-payments, banking credentials, live transfer provider, or outbound email
-integration exists in this build. Email stays draft-only; reminders may raise
-generic browser notifications on the same device after permission is granted.
-The user selected demo access, so authentication remains absent by design.
+This assessment is a project self-review, not a certification or a claim of
+production readiness. The hosted app uses Google OAuth and the configured Cloud
+Run runtime uses Firestore for task state, but the remaining risks in §13 still
+matter: process-local rate limiting, limited audit guarantees depending on
+logging configuration, local-only browser data, pattern-based injection checks,
+and the need for stronger server-issued approvals before any future external
+financial action. No real payments or bank transfers are implemented; email
+functionality remains draft-only.
+
+
+## 16. Latest repository CI verification — 2026-10-20
+
+The latest successful GitHub Actions quality run on `main` is commit
+`cbe0a31999b54d57299d4a49db2ef79f4b6ba184` ([run 39411467566](https://github.com/Rubai106/StudyRunway/actions/runs/39411467566)). The workflow completed dependency installation, typecheck, lint, `npm test` (**390 tests across 38 files**), production build, and Playwright E2E (**66 passed in about 1.6 minutes**). This is the current automated CI result; §15 remains a dated historical verification record and its 378/64 totals are superseded by this run.
+
+The dependency install still reports **15 findings (1 moderate, 12 high, 2 critical)**. A 19 October production-only audit reported zero findings, but the complete dependency tree is not cleared. CI success is not a substitute for dependency triage or a live-provider security assessment.
+
+The separately submitted Item 06 evidence package documents a local deterministic sandbox execution from source revision `e213b84272d98b03b51807bd1e416bc4f0ad0933`. It explicitly does not claim a hosted authenticated workflow: the hosted URL showed a Google sign-in gate and anonymous agent calls returned 401 during the recorded review. The video is 75 seconds, and the receipt states that no real payment occurred.

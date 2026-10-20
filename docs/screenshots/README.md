@@ -1,7 +1,7 @@
-# Current screenshots
+# Product screenshots
 
-No current-release screenshots are included in this archive. The screenshots in the input archive were captured before the final fixes and showed stale narration and raw minor-unit values, so they have been removed rather than presented as current evidence.
+Screenshot PNGs are intentionally not tracked in this source repository. The six older reference images were removed during the 20 October 2026 submission cleanup so the repository does not present stale screens as the current product.
 
-After installing dependencies and running the patched app, recapture the real application at desktop and 390×844 mobile sizes. Verify the budget result, category overrides, source cross-check, one-time date fields and explicit FX confirmation before using any screenshots in a competition deck.
+For local QA, `scripts/capture-budget-screenshots.mts` can recapture genuine Destination Budget Planner screenshots from the actually running app after the E2E suite. The generated `docs/screenshots/*.png` files are gitignored. Do not replace real captures with mockups or hand-edited evidence.
 
-Do not create synthetic or hand-edited screenshots that imply the application was successfully run when it was not.
+Current product-interface captures are included in the separately delivered `StudyRunway_FinTechathon_Presentation_Final.pptx`. The separate Item 06 evidence ZIP remains the execution-evidence package. Its manifest identifies the source revision and environment; the 75-second video documents a local deterministic sandbox run, not a hosted authenticated workflow. No real payment or transfer occurred.

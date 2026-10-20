@@ -78,6 +78,22 @@ async function installMocks(page: Page) {
   });
 }
 
+/** Open responsive navigation before selecting Chat on narrow screens. */
+/** Open responsive navigation before selecting Chat on narrow screens. */
+async function clickChatNavigation(page: Page) {
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    const menuButton = page.getByRole("button", { name: "Open navigation menu" });
+    await expect(menuButton).toBeVisible({ timeout: 15_000 });
+    if ((await menuButton.getAttribute("aria-expanded")) !== "true") {
+      await menuButton.click();
+    }
+  }
+  const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+  await expect(chatButton).toBeVisible({ timeout: 15_000 });
+  await chatButton.click();
+}
+
+
 test.beforeEach(async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (msg) => {
@@ -89,11 +105,7 @@ test.beforeEach(async ({ page }) => {
     consoleErrors;
   if (!LIVE) await installMocks(page);
   await page.goto("/");
-  const chat = page.getByRole("button", { name: "Chat", exact: true });
-  if ((page.viewportSize()?.width ?? 1280) < 768) {
-    await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
-  }
-  await chat.click();
+  await clickChatNavigation(page);
 });
 
 test.afterEach(async ({ page }) => {
@@ -105,6 +117,10 @@ test.afterEach(async ({ page }) => {
 test("provider indicator honestly shows Demo mode when unconfigured", async ({
   page,
 }) => {
+  // The provider badge is inside the collapsible mobile navigation.
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    await page.getByRole("button", { name: "Open navigation menu" }).click();
+  }
   // Works against the mock and the real /api/agent/status alike: no provider
   // is configured in either, so "Demo mode" must show.
   await expect(page.getByText("Demo mode", { exact: true })).toBeVisible();

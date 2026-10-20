@@ -1,10 +1,39 @@
-# Latest follow-up candidate — Gemini provider + E2E/session hardening (2026-10-16)
+# Latest verification record — 2026-10-20
 
-This section describes the source currently packaged in the latest QA candidate.
+### Screenshot artifact cleanup — 2026-10-20
+
+The six PNGs listed in the historical 2026-10-15 screenshot-regeneration entry were removed from the tracked repository during the presentation refresh. The capture script remains available for local QA, and generated files under `docs/screenshots/*.png` are now gitignored. The older screenshot entry below documents a historical capture pass; it is not an inventory of currently tracked files.
+
+## Current main CI result
+
+The latest successful GitHub Actions quality workflow on `main` is commit
+`cbe0a31999b54d57299d4a49db2ef79f4b6ba184` ([run 39411467566](https://github.com/Rubai106/StudyRunway/actions/runs/39411467566)). The run completed the following checks:
+
+| Check | Current result | Evidence / boundary |
+|---|---|---|
+| `npm ci` | PASSED | Dependency installation completed; npm reported 15 audit findings. |
+| `npm run typecheck` | PASSED | GitHub Actions on the exact main commit above. |
+| `npm run lint` | PASSED | GitHub Actions on the exact main commit above. |
+| `npm test` | PASSED — **390/390 tests across 38 files** | Unit and API tests under CI. |
+| `npm run build` | PASSED | Production build completed. |
+| `npm run e2e` | PASSED — **66 passed in about 1.6 minutes** | Playwright Chromium E2E in CI, including desktop and 390px mobile coverage. |
+| Full dependency audit | **NOT CLEARED** | 15 findings reported: 1 moderate, 12 high, 2 critical. A clean CI run does not mean this audit is clean. |
+
+The older sections below are retained as a chronological QA history. The 378/378 unit/API and 64/64 E2E figures in the 19 October security-evidence pass are historical and are superseded for current CI reporting by the 20 October main run. Do not combine test counts from different commits into one test result.
+
+### Evidence package provenance
+
+The separately submitted Item 06 ZIP contains a 75-second narrated video, screenshots, an exported sandbox receipt, a captioned PDF and a manifest. The manifest identifies the local execution source revision as `e213b84272d98b03b51807bd1e416bc4f0ad0933`; it was run in explicit deterministic demo mode with no AI provider configured. It is a genuine local sandbox execution, not proof of an authenticated execution on the hosted deployment. During the review the hosted URL showed a Google sign-in gate and anonymous agent API requests returned 401. No real payment occurred. See `docs/FINTECHATHON_SUBMISSION_INDEX.md` for the submission mapping.
+
+---
+
+## Historical follow-up candidate — Gemini provider + E2E/session hardening (2026-10-16)
+
+This is a historical record of an earlier QA candidate, not the current release verification.
 It does not inherit pass results from older ZIPs. The user-reported run on the
 preceding `SESSION_RECOVERY_PATCH_UNVERIFIED` archive had 44/58 E2E tests pass
-and 14 fail. This candidate contains fixes aimed at those failures, but those
-full runtime tests have **not been rerun here**.
+and 14 fail. That candidate contained fixes aimed at those failures, but those
+full runtime tests had **not been rerun in that environment**.
 
 | Check | Result | Evidence / limitation |
 |---|---|---|
@@ -173,7 +202,7 @@ typecheck/lint/test/build.
 | `npm run build` | Passed in repair pass (exit 0) — see "Repair pass" section above | QA verifier had no registry access; repaired and re-verified 2026-10-15. |
 | `npm run e2e` | **PASSED 56/56** (2026-10-15, this environment) | Full Playwright suite: 4 specs × chromium desktop + 390px mobile, zero console errors asserted in every test. Initial run had 8 failures in `budget-planner.spec.ts` after the app-side honesty fixes (see "E2E repair" section); all fixed and the full suite re-run green. |
 | `npm audit` | **BLOCKED — NOT RUN** (environmental) | Sandbox registry proxy refuses the audit endpoint: `npm warn audit 403 Forbidden - POST https://registry.npmjs.org/-/npm/v1/security/audits/quick - policy_denied` (`zz_managed_internal_spaces_package_registries`). Lockfile untouched. **Run `npm audit` on the release machine.** |
-| Screenshot regeneration | **Completed** | 6 genuine screenshots captured from the actually running app (dev server, real engine, demo mode): `docs/screenshots/00-welcome.png`, `01-budget-demo.png`, `02-budget-adjusted.png`, `03-budget-sources.png`, `04-budget-applied.png`, `05-budget-demo-mobile.png`. No mockups. |
+| Screenshot regeneration | **HISTORICAL — 2026-10-15** | Six genuine captures were produced from the running app during that QA pass. Those PNGs were later removed from version control on 2026-10-20; the capture script remains and generated screenshots are now gitignored. No mockups were used in the historical pass. |
 
 ## E2E repair (2026-10-15) — 4 stale tests fixed, no app changes needed
 

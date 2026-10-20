@@ -4,7 +4,7 @@ Model-driven AI financial-readiness agent for international students.
 FinTechathon 2026 · International Track · Topic C (Cross-border & Student Finance).
 
 Stack: Next.js 15.5.28 (pinned) · React 19 · TypeScript 5.7 · Tailwind 3.4 ·
-vitest 3.2.3 · Playwright 1.53.1 · three 0.182 / @react-three/fiber 9.4.2 /
+vitest 3.2.7 · Playwright 1.64.1 · three 0.182 / @react-three/fiber 9.4.2 /
 drei 10.7.7 (3D tool visualizer) · zod 3.24.2 · pdfjs-dist (local PDF evidence
 extraction) · sharp 0.35.5.
 
