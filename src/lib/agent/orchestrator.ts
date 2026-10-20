@@ -1449,7 +1449,7 @@ async function* runModelFlow(
   message: string,
   run: ResolvedRun,
   opts: Required<Pick<RunAgentOptions, "toolTimeoutMs" | "maxToolCalls">> &
-    Pick<RunAgentOptions, "signal"> & {
+    Pick<RunAgentOptions, "signal" | "language"> & {
       skipUnderstanding?: boolean;
       skipPlanning?: boolean;
       priorToolResults?: { tool: string; result: ToolResult }[];
