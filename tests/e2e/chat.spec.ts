@@ -197,20 +197,23 @@ test("form validation blocks bad amount input", async ({ page }) => {
   await composer.fill("FORM-VALIDATION please");
   await composer.press("Enter");
 
-  const amountInput = page.locator('input[type="number"]').first();
+  const amountForm = page.getByTestId("clarify-amount");
+  const amountInput = amountForm.locator('input[type="number"]');
   await expect(amountInput).toBeVisible({ timeout: 15000 });
   await amountInput.fill("-50");
-  await page.getByRole("button", { name: "Submit", exact: true }).first().click();
-  await expect(page.getByText("Enter a positive number.")).toBeVisible();
+  await amountForm.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(amountForm.getByText("Enter a positive number.")).toBeVisible();
   // No answer request should have been sent for the invalid submission.
   await page.waitForTimeout(500);
   // Fix it: valid amount + currency passes validation and posts.
   await amountInput.fill("3000");
-  await page.locator("select").first().selectOption("EUR");
+  // The multilingual header has its own select, so scope currency selection
+  // to the clarification form rather than assuming it's the first page select.
+  await amountForm.locator("select").selectOption("EUR");
   const answerRequest = page.waitForRequest((req) =>
     req.url().includes("/api/agent/answer"),
   );
-  await page.getByRole("button", { name: "Submit", exact: true }).first().click();
+  await amountForm.getByRole("button", { name: "Submit", exact: true }).click();
   const req = await answerRequest;
   const payload = req.postDataJSON() as {
     questionId?: string;
