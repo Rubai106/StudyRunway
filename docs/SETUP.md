@@ -17,6 +17,26 @@ npm run build     # production build
 npm start         # serve the production build
 ```
 
+
+## Troubleshooting missing Auth.js client dependency
+
+If Next.js reports `Module not found: Can't resolve 'next-auth/react'`, the
+repository already declares Auth.js; the local install is likely incomplete or
+stale. From the project root (the directory containing `package.json`), stop
+`npm run dev` with `Ctrl+C` and run this in PowerShell:
+
+```powershell
+Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue
+npm ci
+node -p "require.resolve('next-auth/react')"
+npm run dev
+```
+
+The resolve command should print a path under `node_modules/next-auth`. If
+`npm ci` itself fails, fix that install error first; the Next.js compile error
+is a downstream symptom. `npm run check:runtime-deps` performs the same focused
+module-resolution check and is also run by CI after a clean install.
+
 ## Environment variables
 
 Copy `.env.example` to `.env.local` and fill in **server-side only** values.

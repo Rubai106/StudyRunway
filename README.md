@@ -67,6 +67,26 @@ npm run e2e      # playwright test (chromium desktop + mobile 390px)
 npm run build    # next build
 ```
 
+
+### Troubleshooting: `Can't resolve 'next-auth/react'`
+
+Auth.js is already declared in `package.json` and pinned in `package-lock.json`.
+This error usually means the local dependencies are incomplete or the dev server
+is running from a different checkout. In PowerShell, stop the dev server with
+`Ctrl+C`, then run these commands from the folder containing `package.json`:
+
+```powershell
+Remove-Item -Recurse -Force .next -ErrorAction SilentlyContinue
+npm ci
+node -p "require.resolve('next-auth/react')"
+npm run dev
+```
+
+The `node -p` command should print the resolved module path before you restart
+the app. You can run `npm run check:runtime-deps` at any time to verify the Auth.js
+client entry point is installed. Do not change the import or install a second
+copy of Auth.js to work around a stale `node_modules` directory.
+
 ## Use Google AI Studio / Gemini
 
 1. Copy `.env.example` to `.env.local` beside `package.json`.
