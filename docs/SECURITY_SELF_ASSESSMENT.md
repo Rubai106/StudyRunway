@@ -281,8 +281,9 @@ that the app had no login.
      rejects when the `decisionId` hash or any expected field (amounts,
      currencies, due date) differs, and refuses duplicate or stale
      approvals.
-  4. **Authentication and authorization** — absent in this build. The ack
-     strings provide neither.
+  4. **High-assurance transaction-level authorization for external actions is
+     not implemented.** Google OAuth now protects the hosted routes, but the
+     fixed ack strings still do not prove identity or authorize a specific real transaction.
 - The route-level tests added 2026-10-19 cover layers 1 and 3 (wrong ack
   value; tampered approval fields; stale approval after draft change; reused
   approval; non-ready decision state). Each asserts the rejected request
