@@ -55,6 +55,36 @@ extraction) · sharp 0.35.5.
   xAI, Gemini, OpenAI, and Anthropic. No API key is included. Without a real
   configured provider key, the app uses the clearly labelled deterministic sample workflow.
 
+## Feature status: implemented vs. partial
+
+This summary distinguishes working deterministic/local paths from features that depend on live providers or deployment configuration.
+
+### Implemented in the codebase
+
+- **Student-finance agent.** Understands finance requests, asks clarifying questions, plans steps, calls allow-listed tools, and verifies key calculations using deterministic engines. A labelled no-key demo is available.
+- **Tuition funding and shortfall planning.** Combines dated costs with multiple funding sources, separates confirmed from expected/unverified money, and highlights gaps and upcoming obligations.
+- **Crisis and income-shock planning.** Models delayed or reduced funding and other scenarios, recalculates the projected balance and earliest shortfall, and ranks dated recovery actions.
+- **Destination living-cost planner.** Uses sourced ranges and adjustable assumptions where the dataset has coverage; exposes missing data instead of inventing estimates. Canada currently lacks typical living-cost coverage.
+- **Overview dashboard and multi-currency cash flow.** Summarizes funding results, alerts and deadlines, and groups inflows and bills by currency. Any FX rate is labelled with its pair, date and source/assumption; unlike currencies are not silently added together.
+- **Daily student budget and arrival-cost planners.** Track dated expenses and one-time moving/setup costs by category and currency without inventing prices.
+- **Rental-payment safety review.** Highlights risk indicators and suggests verification steps; it cannot prove that a listing or landlord is fraudulent.
+- **Financial document review.** Extracts candidate amounts, dates, currencies and supporting excerpts from text and text-extractable PDFs. Candidates require review/confirmation before they can be used; scanned-image OCR is not guaranteed.
+- **Safe-to-Send safeguards.** Computes deterministic readiness and risk states, supports explicit approval for a reversible sandbox simulation, and provides decision evidence/receipt export. It does not send tuition payments.
+- **Security controls and evaluations.** Google OAuth and verified-email checks, server-side route/session validation, tool allow-lists, input validation, identifier redaction and privacy-limited audit events are implemented. CI covers dependency resolution, typecheck, lint, unit/evaluation tests, build and Playwright flows.
+- **Multilingual interface foundation.** The language selector supports English, Bengali, Simplified Chinese, Hindi and Spanish; shared UI text and the assistant language context are localized.
+
+### Partial, conditional, or not live-verified
+
+- **Transfer comparisons.** The chat comparison uses sample/reference data; users can enter provider quotes. The optional Wise preview is indicative only, not rate-locked or executable, and can omit receiving/intermediary charges. Other providers are not live-integrated.
+- **Official finance, banking and credit research.** A Vertex Gemini Google Search grounding path with official-domain and citation checks is implemented, but a live check on 16 October 2026 returned no cited pages after three searches, so source-backed live answers were not verified at that check. The app withholds answers when citations fail its checks.
+- **Live model quality.** Provider adapters and an opt-in Vertex smoke check exist, but CI mostly uses deterministic/scripted or mocked provider responses. Live response consistency, citation availability, quotas and credentials must be checked in the target environment.
+- **Deep localization.** Some detailed planner controls and result cards can still show English text even when another assistant language is selected.
+- **Persistence and sync.** The documented Cloud Run setup supports Firestore-backed server task state when configured; local development defaults to process-local memory. Browser transcripts, reminders, personal budgets and preferences are stored on that device and do not sync across devices.
+- **Reminders and outbound actions.** Reminders are browser-local and notifications depend on permission and the app being open. Email is draft-only, not sent. No real payment rail is connected.
+- **Production security posture.** The full dependency tree has not been cleared by a current audit, and the demo's route protections, rate limiting, provider configuration and storage still need deployment-specific review before real-user use.
+
+For detail and exact boundaries, see [Feature Status](docs/FEATURE_STATUS.md), [Limitations](docs/LIMITATIONS.md), [Setup](docs/SETUP.md), and [Security Self-Assessment](docs/SECURITY_SELF_ASSESSMENT.md).
+
 ## Commands
 
 ```bash
@@ -208,13 +238,14 @@ in account-namespaced local storage on that device; they are not synced or backe
 up to Firestore. See `docs/SETUP.md` and `docs/SECURITY_SELF_ASSESSMENT.md` for
 the exact deployment boundary and remaining risks.
 
-## Latest verification status — 2026-10-20
+## Verification and submission evidence
 
-The latest successful GitHub Actions quality run on `main` is commit
-`cbe0a31999b54d57299d4a49db2ef79f4b6ba184` ([workflow run](https://github.com/Rubai106/StudyRunway/actions/runs/39411467566)). It completed `npm ci`, typecheck, lint, unit/API tests (**390 tests across 38 files**), production build, and Playwright E2E (**66 passed in 1.6 minutes**). Older totals in the historical QA log are not current.
+The [GitHub Actions quality workflow](https://github.com/Rubai106/StudyRunway/actions/workflows/quality.yml) runs on pushes and pull requests. A verification run checks a clean `npm ci`, the `next-auth/react` runtime dependency, typecheck, lint, unit/evaluation tests, production build and Playwright E2E. Use the run page to confirm the exact commit SHA and test totals; numbers from an earlier run do not validate a newer revision. Most chat/provider tests are scripted or mocked and do not establish live-model quality, live research citations, hosted OAuth configuration or external quote availability.
 
-**Dependency risk remains open.** The latest CI install reported 15 dependency findings (1 moderate, 12 high, 2 critical). A Windows production-only audit on 2026-10-19 reported zero vulnerabilities, but that does not clear the full dependency tree. Do not run `npm audit fix --force` blindly; assess compatible updates and re-run checks after changing dependencies.
+For a real Vertex check, run `npm run verify:live-ai` with valid Google Cloud ADC/project/model configuration. This is separate from CI and may incur provider charges. A check on **16 October 2026** returned no cited official pages after three Google Search queries, so official-research citations should be confirmed in the target environment before relying on them.
 
-The submission's execution-evidence video records a separate local sandbox run at revision `e213b84272d98b03b51807bd1e416bc4f0ad0933` in demo mode. It is not evidence that the hosted app completed an authenticated transaction workflow. During the evidence review, the hosted app displayed a Google sign-in gate and anonymous agent API requests returned 401. The video and manifest make the environment and revision explicit; no real payment occurred.
+**Dependency audit caveat:** a full-tree audit recorded on **19 October 2026** reported 15 findings (1 moderate, 12 high, 2 critical). A production-only audit on the tested Windows tree reported zero findings, but that does not clear development dependencies or establish the current full-tree status. Re-run `npm audit` on the release machine, inspect the dependency paths/advisories, and avoid `npm audit fix --force` without compatibility review.
 
-For the submission checklist and the current evidence boundaries, start at `docs/FINTECHATHON_SUBMISSION_INDEX.md`.
+The submission's Item 06 video records a **local demo-mode sandbox simulation**, using source revision `e213b84272d98b03b51807bd1e416bc4f0ad0933`; no real payment occurred. During the evidence review, the hosted entry point displayed a Google sign-in gate and anonymous agent API requests returned 401. The local video is not evidence of an authenticated hosted transaction or of the current deployed revision. The evidence manifest and checksums are in the Item 06 package.
+
+For the submission checklist and evidence provenance, see [FinTechathon Submission Index](docs/FINTECHATHON_SUBMISSION_INDEX.md).
