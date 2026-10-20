@@ -193,10 +193,9 @@ test("form validation blocks bad amount input", async ({ page }) => {
   test.skip(LIVE, "mocked API");
   // Use a deterministic mock response with only the amount form so this
   // test targets amount validation without depending on a multi-turn flow.
-  await page
-    .getByRole("textbox", { name: /message studyrunway/i })
-    .fill("FORM-VALIDATION please");
-  await page.getByTestId("send-button").click();
+  const composer = page.getByRole("textbox", { name: /message studyrunway/i });
+  await composer.fill("FORM-VALIDATION please");
+  await composer.press("Enter");
 
   const amountInput = page.locator('input[type="number"]').first();
   await expect(amountInput).toBeVisible({ timeout: 15000 });
