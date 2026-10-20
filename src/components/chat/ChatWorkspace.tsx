@@ -679,6 +679,7 @@ function ChatWorkspaceContent() {
           onAsk={askFromDashboard}
           onOpenConversation={openConversationMessage}
           disabled={!sessionReady || streaming}
+          language={language}
         />
       ) : (
         <>
