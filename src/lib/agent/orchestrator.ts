@@ -2562,6 +2562,7 @@ async function* runAgentInternal(
       toolTimeoutMs,
       maxToolCalls,
       signal: opts.signal,
+      language: opts.language,
       skipUnderstanding: resumeExistingTask,
       skipPlanning: resumingApprovedAction,
       priorToolResults,
