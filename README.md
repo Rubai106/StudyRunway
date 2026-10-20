@@ -2,8 +2,6 @@
 
 FinTechathon 2026 · International Track · Topic C (Cross-border & Student Finance).
 
-This is a fresh rebuild. The old shelved build lives at
-`../studyrunway/` (read-only reference — do not modify it from here).
 
 ## Stack
 
