@@ -78,6 +78,15 @@ async function installMocks(page: Page) {
   });
 }
 
+/** Open responsive navigation before selecting Chat on narrow screens. */
+async function clickChatNavigation(page: Page) {
+  const menuButton = page.getByRole("button", { name: "Open navigation menu" });
+  if (await menuButton.isVisible().catch(() => false)) {
+    await menuButton.click();
+  }
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+}
+
 test.beforeEach(async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (msg) => {
@@ -89,7 +98,7 @@ test.beforeEach(async ({ page }) => {
     consoleErrors;
   if (!LIVE) await installMocks(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await clickChatNavigation(page);
 });
 
 test.afterEach(async ({ page }) => {
