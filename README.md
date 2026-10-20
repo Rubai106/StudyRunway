@@ -3,6 +3,34 @@
 FinTechathon 2026 · International Track · Topic C (Cross-border & Student Finance).
 
 
+
+## Product screenshots
+
+These are genuine UI captures from the running app, not mockups. The budget-planner captures were recorded on **15 October 2026**; the Income Shock Plan capture is from **20 October 2026**. Older captures show the cost engine workflow and should not be mistaken for proof of current hosted authentication or a live transaction. All figures are illustrative sample inputs.
+
+<table>
+  <tr>
+    <td width="50%">
+      <strong>Welcome / product entry point</strong><br>
+      <img src="docs/screenshots/00-welcome.png" alt="StudyRunway welcome screen" width="100%">
+    </td>
+    <td width="50%">
+      <strong>Destination budget result</strong><br>
+      <img src="docs/screenshots/01-budget-demo.png" alt="Destination budget result with cost ranges" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <strong>Source-attributed estimate</strong><br>
+      <img src="docs/screenshots/03-budget-sources.png" alt="Budget estimate with source attribution" width="100%">
+    </td>
+    <td width="50%">
+      <strong>Income Shock Plan — latest capture</strong><br>
+      <img src="docs/screenshots/income-shock.jpg" alt="Income Shock Plan with dated rent and tuition inputs" width="100%">
+    </td>
+  </tr>
+</table>
+
 ## Stack
 
 Next.js 15.5.28 (pinned) · React 19.1.0 · TypeScript 5.7.3 · Tailwind CSS 3.4 ·

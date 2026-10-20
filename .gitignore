@@ -46,8 +46,11 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Local screenshots are regenerated from the app; do not commit stale UI captures.
+# Ignore generated screenshots by default; these curated captures are intentionally tracked.
 docs/screenshots/*.png
+!docs/screenshots/00-welcome.png
+!docs/screenshots/01-budget-demo.png
+!docs/screenshots/03-budget-sources.png
 
 # Temporary archives and local backups
 *.zip

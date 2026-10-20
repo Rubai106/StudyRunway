@@ -1,7 +1,10 @@
 # Product screenshots
 
-Screenshot PNGs are intentionally not tracked in this source repository. The six older reference images were removed during the 20 October 2026 submission cleanup so the repository does not present stale screens as the current product.
+This folder contains a small, curated gallery linked from the root [README](../../README.md).
 
-For local QA, `scripts/capture-budget-screenshots.mts` can recapture genuine Destination Budget Planner screenshots from the actually running app after the E2E suite. The generated `docs/screenshots/*.png` files are gitignored. Do not replace real captures with mockups or hand-edited evidence.
+- `00-welcome.png`, `01-budget-demo.png`, and `03-budget-sources.png` are genuine screenshots captured from the running app on **15 October 2026**. They document the Destination Budget Planner and source-attribution flow.
+- `income-shock.jpg` is a genuine screenshot from **20 October 2026**, showing the newer Income Shock Plan UI.
 
-Current product-interface captures are included in the separately delivered `StudyRunway_FinTechathon_Presentation_Final.pptx`. The separate Item 06 evidence ZIP remains the execution-evidence package. Its manifest identifies the source revision and environment; the 75-second video documents a local deterministic sandbox run, not a hosted authenticated workflow. No real payment or transfer occurred.
+The older budget-planner screens are included as feature evidence, not as a claim that every part of the deployed UI currently looks identical. Sample figures are illustrative; these images do not prove an authenticated hosted transaction. The separate Item 06 evidence package remains the record for the deterministic sandbox run.
+
+The Playwright capture script `scripts/capture-budget-screenshots.mts` remains available for local QA. Generated PNGs are ignored by default; only the curated PNG filenames above are tracked.
