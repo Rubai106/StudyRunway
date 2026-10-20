@@ -1,5 +1,9 @@
 # Latest verification record — 2026-10-20
 
+### Screenshot artifact cleanup — 2026-10-20
+
+The six PNGs listed in the historical 2026-10-15 screenshot-regeneration entry were removed from the tracked repository during the presentation refresh. The capture script remains available for local QA, and generated files under `docs/screenshots/*.png` are now gitignored. The older screenshot entry below documents a historical capture pass; it is not an inventory of currently tracked files.
+
 ## Current main CI result
 
 The latest successful GitHub Actions quality workflow on `main` is commit
@@ -198,7 +202,7 @@ typecheck/lint/test/build.
 | `npm run build` | Passed in repair pass (exit 0) — see "Repair pass" section above | QA verifier had no registry access; repaired and re-verified 2026-10-15. |
 | `npm run e2e` | **PASSED 56/56** (2026-10-15, this environment) | Full Playwright suite: 4 specs × chromium desktop + 390px mobile, zero console errors asserted in every test. Initial run had 8 failures in `budget-planner.spec.ts` after the app-side honesty fixes (see "E2E repair" section); all fixed and the full suite re-run green. |
 | `npm audit` | **BLOCKED — NOT RUN** (environmental) | Sandbox registry proxy refuses the audit endpoint: `npm warn audit 403 Forbidden - POST https://registry.npmjs.org/-/npm/v1/security/audits/quick - policy_denied` (`zz_managed_internal_spaces_package_registries`). Lockfile untouched. **Run `npm audit` on the release machine.** |
-| Screenshot regeneration | **Completed** | 6 genuine screenshots captured from the actually running app (dev server, real engine, demo mode): `docs/screenshots/00-welcome.png`, `01-budget-demo.png`, `02-budget-adjusted.png`, `03-budget-sources.png`, `04-budget-applied.png`, `05-budget-demo-mobile.png`. No mockups. |
+| Screenshot regeneration | **HISTORICAL — 2026-10-15** | Six genuine captures were produced from the running app during that QA pass. Those PNGs were later removed from version control on 2026-10-20; the capture script remains and generated screenshots are now gitignored. No mockups were used in the historical pass. |
 
 ## E2E repair (2026-10-15) — 4 stale tests fixed, no app changes needed
 

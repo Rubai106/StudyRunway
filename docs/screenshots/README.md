@@ -1,20 +1,7 @@
-# Repository screenshots — legacy/reference status
+# Product screenshots
 
-The six PNG files in this directory are still tracked in the repository. They
-are older product screenshots retained for reference; they must not be treated
-as the authoritative screenshots for the current Item 06 execution evidence or
-as proof of current hosted behavior.
+Screenshot PNGs are intentionally not tracked in this source repository. The six older reference images were removed during the 20 October 2026 submission cleanup so the repository does not present stale screens as the current product.
 
-The current execution evidence is packaged separately in
-`StudyRunway_Item06_Execution_Evidence_FINAL.zip` in the submission materials.
-Its manifest identifies the source revision, environment, primary receipt,
-chronological screenshots and 75-second walkthrough. During that review the
-hosted app presented a Google sign-in gate; the main workflow in the video was
-recorded locally with deterministic demo mode enabled.
+For local QA, `scripts/capture-budget-screenshots.mts` can recapture genuine Destination Budget Planner screenshots from the actually running app after the E2E suite. The generated `docs/screenshots/*.png` files are gitignored. Do not replace real captures with mockups or hand-edited evidence.
 
-**No tracked screenshot was deleted or overwritten in this refresh.** Potential
-removal candidates should be reviewed with the repository owner first. If these
-screenshots are kept, their names and this reference-only status should remain
-explicit; if the owner later approves replacing them, recapture genuine UI
-screens from an identified current revision rather than synthesizing or
-hand-editing screenshots.
+Current product-interface captures are included in the separately delivered `StudyRunway_FinTechathon_Presentation_Final.pptx`. The separate Item 06 evidence ZIP remains the execution-evidence package. Its manifest identifies the source revision and environment; the 75-second video documents a local deterministic sandbox run, not a hosted authenticated workflow. No real payment or transfer occurred.
