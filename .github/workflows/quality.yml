@@ -20,6 +20,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Verify Auth.js client dependency
+        run: npm run check:runtime-deps
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
