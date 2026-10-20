@@ -83,15 +83,20 @@ Honest boundaries, so nobody mistakes the demo for more than it is.
 
 ## Sessions & storage
 
-- **In-memory server sessions.** Task state lives in a process-local Map:
-  restarting the server loses it and it is not shared between instances.
-  Google OAuth sign-in and server-side route checks are implemented, and
-  internal task keys are scoped to the authenticated Google identity. OAuth
-  credentials must be configured before sign-in is available. The app still
-  has no database or cross-device sync, so task state disappears on restart.
-- **Client transcripts and reminders in localStorage only** (`studyrunway.*`
-  keys, namespaced by an opaque hash of the signed-in account). They are not
-  encrypted or synced. Clearing browser data or switching devices loses them.
+- **Server-side task persistence depends on the selected store.** Local development
+  defaults to `STUDYRUNWAY_SESSION_STORE=memory`; in that mode task state is
+  process-local, is lost on restart, and is not shared between instances. The
+  repository includes a Firestore REST adapter for the documented Cloud Run
+  configuration (`STUDYRUNWAY_SESSION_STORE=firestore`, project ID and Google
+  Application Default Credentials). That deployment path is durable only when
+  those settings, database access and runtime permissions are correctly
+  configured. Stateful routes fail closed when durable storage is required but
+  unavailable; do not assume an arbitrary deployment has persistence merely
+  because the adapter exists.
+- **Client transcripts, reminders, daily-budget entries, arrival-cost entries
+  and preferences remain in browser localStorage** (`studyrunway.*` keys,
+  namespaced by an opaque hash of the signed-in account). They are not synced
+  across devices. Clearing browser data or switching devices loses them.
   "Delete my data" wipes the active account's StudyRunway keys on that device.
 
 ## Engine & documents
