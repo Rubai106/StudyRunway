@@ -74,10 +74,26 @@ function expectNoConsoleErrors(errors: string[]) {
   );
 }
 
+/** Open responsive navigation before selecting Chat on narrow screens. */
+/** Open responsive navigation before selecting Chat on narrow screens. */
+async function clickChatNavigation(page: Page) {
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    const menuButton = page.getByRole("button", { name: "Open navigation menu" });
+    await expect(menuButton).toBeVisible({ timeout: 15_000 });
+    if ((await menuButton.getAttribute("aria-expanded")) !== "true") {
+      await menuButton.click();
+    }
+  }
+  const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+  await expect(chatButton).toBeVisible({ timeout: 15_000 });
+  await chatButton.click();
+}
+
+
 /** Click the welcome-screen demo button and wait for the budget card. */
 async function runSampleDemo(page: Page) {
   await page.goto("/");
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await clickChatNavigation(page);
   await page
     .getByRole("button", { name: /Try the sample student budget/ })
     .click();
@@ -140,7 +156,7 @@ test.describe("destination budget planner", () => {
   }) => {
     const errors = watchConsole(page);
     await page.goto("/");
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await clickChatNavigation(page);
     await sendMessage(page, "help me plan my living costs abroad");
 
     // Demo mode cannot reason — it asks an honest clarifying question.
@@ -332,7 +348,7 @@ test.describe("destination budget planner", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await clickChatNavigation(page);
     await sendMessage(page, "check canada budget please");
 
     await expect(
@@ -428,7 +444,7 @@ test.describe("destination budget planner", () => {
   }) => {
     const errors = watchConsole(page);
     await page.goto("/");
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await clickChatNavigation(page);
     const demo = page.getByRole("button", {
       name: /Try the sample student budget/,
     });
@@ -448,7 +464,7 @@ test.describe("destination budget planner", () => {
   }) => {
     const errors = watchConsole(page);
     await page.goto("/");
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await clickChatNavigation(page);
     const stsButton = page.getByRole("button", {
       name: /Try the Safe-to-Send tuition demo/,
     });

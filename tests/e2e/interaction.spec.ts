@@ -14,6 +14,7 @@
  * contract; the demo provider indicator is asserted against the real
  * /api/agent/status shape.
  */
+import { createHash } from "node:crypto";
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 interface AnswerPayload {
@@ -120,9 +121,25 @@ async function sendMessage(page: Page, text: string) {
   await page.getByTestId("send-button").click();
 }
 
+/** Open responsive navigation before selecting Chat on narrow screens. */
+/** Open responsive navigation before selecting Chat on narrow screens. */
+async function clickChatNavigation(page: Page) {
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    const menuButton = page.getByRole("button", { name: "Open navigation menu" });
+    await expect(menuButton).toBeVisible({ timeout: 15_000 });
+    if ((await menuButton.getAttribute("aria-expanded")) !== "true") {
+      await menuButton.click();
+    }
+  }
+  const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+  await expect(chatButton).toBeVisible({ timeout: 15_000 });
+  await chatButton.click();
+}
+
+
 async function openChat(page: Page) {
   await page.goto("/");
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await clickChatNavigation(page);
 }
 
 test.describe("interaction states", () => {
@@ -309,7 +326,7 @@ test.describe("interaction states", () => {
 
     // Reload: the transcript is restored.
     await page.reload();
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await clickChatNavigation(page);
     await expect(
       page.getByText("remember this message xyz", { exact: true })
     ).toBeVisible({ timeout: 15000 });
@@ -335,8 +352,11 @@ test.describe("interaction states", () => {
   });
 
   test("expired persisted transcript starts a fresh conversation after server restart", async ({ page }) => {
+    const storageSuffix = `.__user_${createHash("sha256").update("studyrunway-e2e-user").digest("hex").slice(0, 32)}`;
+    const lastSessionKey = `studyrunway.last-session${storageSuffix}`;
+    const transcriptKey = `studyrunway.chat.expired-session-123${storageSuffix}`;
     await installMocks(page, { sessionActive: false });
-    await page.addInitScript(() => {
+    await page.addInitScript((keys) => {
       const sessionId = "expired-session-123";
       const stored = {
         sessionId,
@@ -359,9 +379,9 @@ test.describe("interaction states", () => {
           },
         ],
       };
-      localStorage.setItem("studyrunway.last-session", sessionId);
-      localStorage.setItem(`studyrunway.chat.${sessionId}`, JSON.stringify(stored));
-    });
+      localStorage.setItem(keys.lastSessionKey, sessionId);
+      localStorage.setItem(keys.transcriptKey, JSON.stringify(stored));
+    }, { lastSessionKey, transcriptKey });
 
     await openChat(page);
     await expect(
@@ -374,7 +394,7 @@ test.describe("interaction states", () => {
       page.getByRole("button", { name: /scholarship may arrive late/i }),
     ).toBeVisible();
     expect(
-      await page.evaluate(() => localStorage.getItem("studyrunway.last-session")),
+      await page.evaluate((key) => localStorage.getItem(key), lastSessionKey),
     ).toBeNull();
   });
 
@@ -407,6 +427,10 @@ test.describe("interaction states", () => {
   }) => {
     await installMocks(page);
     await openChat(page);
+    // The provider badge is inside the collapsible mobile navigation.
+    if ((page.viewportSize()?.width ?? 1280) < 1024) {
+      await page.getByRole("button", { name: "Open navigation menu" }).click();
+    }
     await expect(page.getByText("Demo mode", { exact: true })).toBeVisible();
   });
 });
