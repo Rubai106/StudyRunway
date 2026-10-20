@@ -4,7 +4,8 @@
 **Event:** 2026 Shenzhen International FinTech Competition · FinTechathon International Track · Topic C: Cross-border & Student Finance Assistant  
 **Repository:** https://github.com/Rubai106/StudyRunway  
 **Hosted URL:** https://studyrunway-agent-dnwlfigpsa-el.a.run.app/  
-**Current CI evidence:** [main-branch Actions runs](https://github.com/Rubai106/StudyRunway/actions/workflows/quality.yml?query=branch%3Amain). Each run shows the exact commit SHA and its own test counts; historic counts should not be copied to a newer revision.\n
+**Current CI evidence:** [main-branch Actions runs](https://github.com/Rubai106/StudyRunway/actions/workflows/quality.yml?query=branch%3Amain). Each run shows the exact commit SHA and its own test counts; historic counts should not be copied to a newer revision.
+
 This page maps the six submission checklist items to maintained source documents and the current execution-evidence package. It also distinguishes current repository CI from the separate local sandbox video run.
 
 ## Checklist mapping
