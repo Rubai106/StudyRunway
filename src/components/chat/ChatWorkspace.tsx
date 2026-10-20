@@ -15,6 +15,7 @@ import Dashboard from "../dashboard/Dashboard";
 import ResultCard from "../results";
 import { SignOutButton } from "../auth/GoogleSignIn";
 import { setUserStorageScope } from "@/lib/userStorage";
+import { getExamples, isLanguageCode, SUPPORTED_LANGUAGES, translate, type LanguageCode } from "@/lib/multilingual";
 import {
   clearLastSession,
   filterPersistableResults,
@@ -43,13 +44,6 @@ interface ProviderStatus {
   configured?: boolean;
   label?: string;
 }
-
-const EXAMPLES = [
-  "My scholarship may arrive late. Can I still pay tuition on time?",
-  "Find the best viable way to send €3,000 for tuition.",
-  "What happens if my living expenses increase by 15%?",
-  "Help me recover from a tuition funding shortfall.",
-];
 
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -111,6 +105,19 @@ export default function ChatWorkspace({ storageScope }: { storageScope: string }
 }
 
 function ChatWorkspaceContent() {
+  const [language, setLanguage] = useState<LanguageCode>("en");
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("studyrunway-assistant-language");
+      if (isLanguageCode(saved)) setLanguage(saved);
+    } catch {
+      // Language selection still works for the current session if storage is unavailable.
+    }
+  }, []);
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
+
   const [activeView, setActiveView] = useState<"overview" | "chat">("overview");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string>(() => newId());
@@ -374,7 +381,7 @@ function ChatWorkspaceContent() {
         const res = await fetch("/api/agent/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, message: trimmed }),
+          body: JSON.stringify({ sessionId, message: trimmed, language }),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
@@ -443,7 +450,7 @@ function ChatWorkspaceContent() {
         activeAssistantId.current = null;
       }
     },
-    [handleStreamEvent, sessionId, sessionReady, streaming, updateAssistant],
+    [handleStreamEvent, language, sessionId, sessionReady, streaming, updateAssistant],
   );
 
   const stop = useCallback(() => {
@@ -583,7 +590,7 @@ function ChatWorkspaceContent() {
               StudyRunway
             </h1>
             <p className="hidden truncate text-[11px] text-[var(--sr-ink)]/50 sm:block">
-              Your AI financial readiness agent for studying abroad
+              {translate(language, "subtitle")}
             </p>
           </div>
           </div>
@@ -602,7 +609,7 @@ function ChatWorkspaceContent() {
           id="primary-navigation-panel"
           className={`sr-mobile-nav ${mobileMenuOpen ? "flex" : "hidden"} absolute inset-x-0 top-[calc(100%+0.5rem)] flex-col gap-3 p-4 lg:static lg:flex lg:flex-row lg:items-center lg:gap-4 lg:p-0`}
         >
-        <nav aria-label="Main navigation" className="flex flex-wrap items-center gap-1 border-b border-[var(--sr-line)] pb-2 lg:border-0 lg:pb-0">
+        <nav aria-label={translate(language, "overview") + " / " + translate(language, "chat")} className="flex flex-wrap items-center gap-1 border-b border-[var(--sr-line)] pb-2 lg:border-0 lg:pb-0">
           <button
             type="button"
             onClick={() => { setActiveView("overview"); setMobileMenuOpen(false); }}
@@ -610,7 +617,7 @@ function ChatWorkspaceContent() {
             className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] ${activeView === "overview" ? "bg-[var(--sr-pine)]/10 text-[var(--sr-pine)]" : "text-[var(--sr-ink)]/60 hover:bg-[var(--sr-mist)]/70"}`}
           >
             <LayoutDashboard size={15} aria-hidden="true" />
-            Overview
+            {translate(language, "overview")}
           </button>
           <button
             type="button"
@@ -619,10 +626,30 @@ function ChatWorkspaceContent() {
             className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] ${activeView === "chat" ? "bg-[var(--sr-pine)]/10 text-[var(--sr-pine)]" : "text-[var(--sr-ink)]/60 hover:bg-[var(--sr-mist)]/70"}`}
           >
             <MessageSquareText size={15} aria-hidden="true" />
-            Chat
+            {translate(language, "chat")}
           </button>
         </nav>
         <div className="flex flex-wrap items-center gap-2 lg:ml-auto lg:shrink-0">
+          <label htmlFor="assistant-language" className="sr-only">{translate(language, "languageLabel")}</label>
+          <select
+            id="assistant-language"
+            aria-label={translate(language, "languageLabel")}
+            title={translate(language, "languageHelp")}
+            value={language}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (!isLanguageCode(next)) return;
+              setLanguage(next);
+              try {
+                window.localStorage.setItem("studyrunway-assistant-language", next);
+              } catch {
+                // Keep the in-memory preference if local storage is blocked.
+              }
+            }}
+            className="max-w-[150px] rounded-xl border border-[var(--sr-line)] bg-white/80 px-2.5 py-1.5 text-xs font-medium text-[var(--sr-ink)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--sr-pine)]/30"
+          >
+            {SUPPORTED_LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}
+          </select>
           <ReminderCenter />
           {providerBadge}
           <button
@@ -631,7 +658,7 @@ function ChatWorkspaceContent() {
             disabled={!sessionReady}
             className="rounded-xl border border-[var(--sr-line)] px-3 py-1.5 text-xs font-medium text-[var(--sr-ink)]/70 transition hover:bg-[var(--sr-mist)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-wait disabled:opacity-50"
           >
-            New conversation
+            {translate(language, "newConversation")}
           </button>
           <SignOutButton />
           <button
@@ -639,9 +666,9 @@ function ChatWorkspaceContent() {
             onClick={deleteData}
             disabled={!sessionReady}
             className="hidden rounded-xl border border-[var(--sr-line)] px-3 py-1.5 text-xs font-medium text-[var(--sr-ink)]/70 transition hover:bg-[var(--sr-mist)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-wait disabled:opacity-50 sm:block"
-            title="Erase every StudyRunway conversation stored on this device"
+            title={translate(language, "deleteDataTitle")}
           >
-            Delete my data
+            {translate(language, "deleteMyData")}
           </button>
         </div>
         </div>
@@ -653,6 +680,7 @@ function ChatWorkspaceContent() {
           onAsk={askFromDashboard}
           onOpenConversation={openConversationMessage}
           disabled={!sessionReady || streaming}
+          language={language}
         />
       ) : (
         <>
@@ -667,6 +695,7 @@ function ChatWorkspaceContent() {
             <div className="mx-auto max-w-3xl">
               {messages.length === 0 ? (
                 <Intro
+                  language={language}
                   onExample={(text) => sendMessage(text)}
                   disabled={!sessionReady}
                 />
@@ -712,7 +741,7 @@ function ChatWorkspaceContent() {
               disabled={!sessionReady}
               className="text-[11px] text-[var(--sr-ink)]/50 underline disabled:opacity-50"
             >
-              Delete my data
+              {translate(language, "deleteMyData")}
             </button>
           </div>
 
@@ -730,6 +759,7 @@ function ChatWorkspaceContent() {
             canRetry={canRetry}
             disabled={!sessionReady}
             error={composerError}
+            language={language}
           />
         </>
       )}
@@ -738,12 +768,15 @@ function ChatWorkspaceContent() {
 }
 
 function Intro({
+  language,
   onExample,
   disabled = false,
 }: {
+  language: LanguageCode;
   onExample: (text: string) => void;
   disabled?: boolean;
 }) {
+  const examples = getExamples(language);
   return (
     <div className="flex flex-col items-center py-6 text-center sm:py-10">
       <span
@@ -757,12 +790,10 @@ function Intro({
         </svg>
       </span>
       <h2 className="mt-5 max-w-md text-2xl font-bold tracking-tight sm:text-3xl">
-        Know you can afford the whole journey
+        {translate(language, "introTitle")}
       </h2>
       <p className="mt-3 max-w-md text-sm leading-relaxed text-[var(--sr-ink)]/65">
-        StudyRunway is an AI agent that checks whether your tuition and living
-        costs stay funded — and finds a way when they don&apos;t. Ask in plain
-        words; it plans, checks live details, and shows its work.
+        {translate(language, "introDescription")}
       </p>
       <button
         type="button"
@@ -772,10 +803,10 @@ function Intro({
         className="mt-5 w-full rounded-2xl bg-[var(--sr-pine)] px-4 py-3.5 text-left shadow-[0_2px_8px_rgba(31,42,38,0.15)] transition hover:bg-[var(--sr-pine)]/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-wait disabled:opacity-60"
       >
         <span className="block text-sm font-semibold text-white">
-          Try the sample student budget
+          {translate(language, "sampleBudget")}
         </span>
         <span className="mt-0.5 block text-xs text-white/75">
-          Limerick, Ireland — €900/mo · real budget engine, no AI key needed
+          {translate(language, "sampleBudgetSub")}
         </span>
       </button>
       <button
@@ -786,14 +817,14 @@ function Intro({
         className="mt-3 w-full rounded-2xl border border-[var(--sr-line)] bg-white/90 px-4 py-3.5 text-left shadow-[0_1px_2px_rgba(31,42,38,0.08)] transition hover:border-[var(--sr-pine)]/60 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-wait disabled:opacity-60"
       >
         <span className="block text-sm font-semibold text-[var(--sr-ink)]">
-          Try the Safe-to-Send tuition demo
+          {translate(language, "safeSendSample")}
         </span>
         <span className="mt-0.5 block text-xs text-[var(--sr-ink)]/65">
-          Deterministic decision card + sandbox approval rules · no real transfer
+          {translate(language, "safeSendSampleSub")}
         </span>
       </button>
       <div className="mt-4 grid w-full gap-2 text-left sm:grid-cols-2">
-        {EXAMPLES.map((example) => (
+        {examples.map((example) => (
           <button
             key={example}
             type="button"
@@ -806,8 +837,7 @@ function Intro({
         ))}
       </div>
       <p className="mt-5 max-w-md text-[11px] leading-relaxed text-[var(--sr-ink)]/45">
-        Demo build for the 2026 Shenzhen International FinTech Competition —
-        International Track, Topic C. Nothing here is financial advice.
+        {translate(language, "introFooter")}
       </p>
     </div>
   );

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { buildDocumentEvidenceMessage, candidatesFromText, extractPdfFacts, hasDocumentPromptInjection } from "@/lib/extract";
 import type { ExtractedCandidate } from "@/lib/extract";
+import { translate, type LanguageCode } from "@/lib/multilingual";
 
 interface Props {
   /** Request payload and privacy-safe transcript label. */
@@ -13,6 +14,7 @@ interface Props {
   canRetry: boolean;
   disabled?: boolean;
   error?: string | null;
+  language: LanguageCode;
 }
 
 interface LocalAttachment {
@@ -48,6 +50,7 @@ export default function Composer({
   canRetry,
   disabled,
   error,
+  language,
 }: Props) {
   const [value, setValue] = useState("");
   const [attachment, setAttachment] = useState<LocalAttachment | null>(null);
@@ -118,7 +121,7 @@ export default function Composer({
       )}
       <div className="mx-auto max-w-3xl">
         <div className="rounded-2xl border border-[var(--sr-line)] bg-white shadow-[0_2px_12px_rgba(31,42,38,0.08)] transition focus-within:border-[var(--sr-pine)] focus-within:ring-2 focus-within:ring-[var(--sr-pine)]/20">
-          <label htmlFor="chat-composer" className="sr-only">Message StudyRunway — Enter to send, Shift+Enter for a new line</label>
+          <label htmlFor="chat-composer" className="sr-only">{translate(language, "composerAccessibleLabel")}</label>
           <textarea
             id="chat-composer"
             ref={textareaRef}
@@ -132,7 +135,7 @@ export default function Composer({
             }}
             rows={3}
             disabled={disabled}
-            placeholder="Ask about your tuition, transfers, or funding…"
+            placeholder={translate(language, "composerPlaceholder")}
             aria-describedby="composer-hint"
             className="max-h-40 w-full resize-y bg-transparent px-4 pb-1 pt-3 text-sm leading-relaxed text-[var(--sr-ink)] placeholder:text-[var(--sr-ink)]/40 outline-none disabled:opacity-60"
           />
@@ -142,7 +145,7 @@ export default function Composer({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="min-w-0 truncate text-xs font-medium" title={attachment.fileName}>📎 {attachment.fileName}</span>
                 <div className="flex items-center gap-2">
-                  <label className="text-[11px] text-[var(--sr-ink)]/60" htmlFor="document-kind">Document type</label>
+                  <label className="text-[11px] text-[var(--sr-ink)]/60" htmlFor="document-kind">{translate(language, "documentType")}</label>
                   <select
                     id="document-kind"
                     value={attachment.documentKind}
@@ -151,7 +154,7 @@ export default function Composer({
                   >
                     {DOCUMENT_KINDS.map((kind) => <option key={kind} value={kind}>{describeKind(kind)}</option>)}
                   </select>
-                  <button type="button" onClick={() => setAttachment(null)} className="rounded-lg px-2 py-1 text-xs text-[var(--sr-clay)] hover:bg-white" aria-label="Remove attached document">Remove</button>
+                  <button type="button" onClick={() => setAttachment(null)} className="rounded-lg px-2 py-1 text-xs text-[var(--sr-clay)] hover:bg-white" aria-label={translate(language, "remove")}>{translate(language, "remove")}</button>
                 </div>
               </div>
               <p className="mt-1 text-[11px] text-[var(--sr-ink)]/60">
@@ -168,23 +171,23 @@ export default function Composer({
                 disabled={attaching || disabled}
                 className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium text-[var(--sr-ink)]/70 transition hover:bg-[var(--sr-mist)] hover:text-[var(--sr-ink)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:opacity-50"
               >
-                <span aria-hidden="true">📎</span>{attaching ? "Reading…" : attachment ? "Replace" : "Attach"}
+                <span aria-hidden="true">📎</span>{attaching ? translate(language, "reading") : attachment ? translate(language, "replace") : translate(language, "attach")}
               </button>
-              <span className="hidden text-[11px] text-[var(--sr-ink)]/40 sm:inline">.txt / .pdf — extracted on this device</span>
+              <span className="hidden text-[11px] text-[var(--sr-ink)]/40 sm:inline">{translate(language, "attachHelp")}</span>
             </div>
             <div className="flex items-center gap-1.5">
               {streaming ? (
-                <button type="button" onClick={onStop} data-testid="stop-button" className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--sr-clay)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sr-clay)]/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-clay)]"><span aria-hidden="true">■</span> Stop</button>
+                <button type="button" onClick={onStop} data-testid="stop-button" className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--sr-clay)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sr-clay)]/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-clay)]"><span aria-hidden="true">■</span> {translate(language, "stop")}</button>
               ) : (
                 <>
-                  {canRetry && <button type="button" onClick={onRetry} className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--sr-line)] px-3 py-2 text-sm font-medium text-[var(--sr-ink)]/70 transition hover:bg-[var(--sr-mist)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)]"><span aria-hidden="true">↻</span> Retry</button>}
-                  <button type="button" onClick={send} disabled={!canSend || disabled} data-testid="send-button" className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--sr-pine)] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-not-allowed disabled:opacity-40">Send <span aria-hidden="true">↑</span></button>
+                  {canRetry && <button type="button" onClick={onRetry} className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--sr-line)] px-3 py-2 text-sm font-medium text-[var(--sr-ink)]/70 transition hover:bg-[var(--sr-mist)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)]"><span aria-hidden="true">↻</span> {translate(language, "retry")}</button>}
+                  <button type="button" onClick={send} disabled={!canSend || disabled} data-testid="send-button" className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--sr-pine)] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[var(--sr-pine)]/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-not-allowed disabled:opacity-40">{translate(language, "send")} <span aria-hidden="true">↑</span></button>
                 </>
               )}
             </div>
           </div>
         </div>
-        <p className="mt-1.5 text-center text-[11px] text-[var(--sr-ink)]/40">Enter to send · Shift+Enter for a new line</p>
+        <p className="mt-1.5 text-center text-[11px] text-[var(--sr-ink)]/40">{translate(language, "enterHint")}</p>
       </div>
     </div>
   );

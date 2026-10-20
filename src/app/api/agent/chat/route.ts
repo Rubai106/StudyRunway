@@ -1,7 +1,7 @@
 /**
  * POST /api/agent/chat — run (or resume) the agent loop for a session.
  *
- * Body: { sessionId: string, message: string }
+ * Body: { sessionId: string, message: string, language?: "en" | "bn" | "zh" | "hi" | "es" }
  * Response: text/event-stream, one JSON object per `data:` line, using the
  * exact event shapes defined in lib/agent/orchestrator.ts.
  *
@@ -26,6 +26,7 @@ import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "
 import { checkRateLimit, requestClientKey, RATE_MAX_REQUESTS, RATE_WINDOW_MS } from "@/lib/agent/rateLimit";
 import { requireApiUser, scopeSessionId } from "@/lib/auth/requireUser";
 import { withPersistentSession } from "@/lib/agent/firestoreSessionStore";
+import { isLanguageCode } from "@/lib/multilingual";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -66,7 +67,7 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: "request body too large" }, { status: 413 });
   }
 
-  let body: { sessionId?: unknown; message?: unknown };
+  let body: { sessionId?: unknown; message?: unknown; language?: unknown };
   try {
     body = (await req.json()) as { sessionId?: unknown; message?: unknown };
   } catch {
@@ -81,13 +82,16 @@ export async function POST(req: Request): Promise<Response> {
   }
   const sessionId = scopeSessionId(user.id, body.sessionId as string);
   const message = typeof body.message === "string" ? body.message : "";
+  const language = typeof body.language === "string" && isLanguageCode(body.language)
+    ? body.language
+    : "en";
   const signal = req.signal;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
       try {
-        for await (const ev of runAgent({ sessionId, message, signal })) {
+        for await (const ev of runAgent({ sessionId, message, language, signal })) {
           if (signal.aborted) break;
           controller.enqueue(encoder.encode(encodeEvent(ev)));
         }

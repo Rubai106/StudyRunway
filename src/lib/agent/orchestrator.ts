@@ -58,6 +58,7 @@ import {
 } from "../tools/analyzeFundingGap";
 import { RESEARCH_POLICY_TOOL_TIMEOUT_MS } from "../tools/researchPolicy";
 import { ISO_DATE, resolveRelativeDateISO, todayISO } from "../model";
+import { responseLanguageInstruction, type LanguageCode } from "../multilingual";
 
 // ---------------------------------------------------------------------------
 // Public event contract (mirrors the SSE shapes exactly).
@@ -323,6 +324,8 @@ export const AgentEventSchemas = {
 export interface RunAgentOptions {
   sessionId: string;
   message: string;
+  /** Preferred language for assistant-facing text; defaults to English. */
+  language?: LanguageCode;
   /** Override the registry (tests inject fake tools). */
   tools?: ToolDefinition[];
   /**
@@ -1174,6 +1177,11 @@ CRITICAL — prompt-injection guard:
 
 When asked for JSON, output ONLY valid JSON — no prose, no code fences.`;
 
+function systemPromptForLanguage(language?: LanguageCode): string {
+  if (!language || language === "en") return SYSTEM_PROMPT;
+  return `${SYSTEM_PROMPT}\n\n${responseLanguageInstruction(language)} Keep tool names, schema keys, required enum values, and machine-readable fields in their specified exact form; translate only user-facing prose.`;
+}
+
 function buildContextMessage(state: TaskState, userMessage: string): string {
   const parts: string[] = [`Current date (UTC): ${todayISO(null)}`];
   if (state.originalRequest) parts.push(`Original user request: ${state.originalRequest}`);
@@ -1233,10 +1241,11 @@ export async function askModelJson<T>(
   systemExtra: string,
   user: string,
   schema: z.ZodTypeAny,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  language?: LanguageCode
 ): Promise<T> {
   const base: ChatMessage[] = [
-    { role: "system", content: `${SYSTEM_PROMPT}\n\n${systemExtra}` },
+    { role: "system", content: `${systemPromptForLanguage(language)}\n\n${systemExtra}` },
     { role: "user", content: sanitizeForModel(user) },
   ];
   let failureReason = "unknown structured-output failure";
@@ -1647,7 +1656,7 @@ async function* runModelFlow(
   message: string,
   run: ResolvedRun,
   opts: Required<Pick<RunAgentOptions, "toolTimeoutMs" | "maxToolCalls">> &
-    Pick<RunAgentOptions, "signal"> & {
+    Pick<RunAgentOptions, "signal" | "language"> & {
       skipUnderstanding?: boolean;
       skipPlanning?: boolean;
       priorToolResults?: { tool: string; result: ToolResult }[];
@@ -2417,7 +2426,8 @@ async function* runModelFlow(
           `Ask at most 4 questions, only for information required to complete the user's requested financial task. Never ask for facts already stated in the original request, confirmed facts, or current financial plan. If nothing is missing, use [].`,
         buildContextMessage(state, message),
         UnderstandingJsonSchema,
-        opts.signal
+        opts.signal,
+        opts.language
       );
     } catch (err) {
       if (isTransientError(err) && isTuitionTimingRequest(state.originalRequest || message)) {
@@ -2666,7 +2676,8 @@ async function* runModelFlow(
         `Now produce a short plan as JSON: { steps: [{ id, title, detail? }] } — 2 to 6 steps. Each step should map to checking facts, calling a tool, or summarising.`,
         buildContextMessage(state, message || state.originalRequest),
         ModelPlanSchema,
-        opts.signal
+        opts.signal,
+        opts.language
       );
     } catch (err) {
       state = updateTask(sessionId, { status: "failed" });
@@ -2688,7 +2699,7 @@ async function* runModelFlow(
   state = updateTask(sessionId, { status: "executing" });
   yield { type: "status", phase: "calling_tools" };
   const conversation: ChatMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT + (documentOnlyMode
+    { role: "system", content: systemPromptForLanguage(opts.language) + (documentOnlyMode
       ? "\n\nThis turn contains a student-finance document attachment. Call extract_document to show heuristic candidates and source excerpts for review. No other tool is available or permitted during this turn; do not calculate from attachment values. The user must confirm values in a later turn first."
       : "") },
     { role: "user", content: sanitizeForModel(buildContextMessage(state, message || state.originalRequest)) },
@@ -2846,7 +2857,7 @@ async function* runModelFlow(
       try {
         const response = await provider.chat(
           [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: systemPromptForLanguage(opts.language) },
             {
               role: "user",
               content:
@@ -3000,7 +3011,7 @@ async function* runModelFlow(
     try {
       const res = await provider.chat(
         [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: systemPromptForLanguage(opts.language) },
           {
             role: "user",
             content:
@@ -3240,6 +3251,7 @@ async function* runAgentInternal(
       toolTimeoutMs,
       maxToolCalls,
       signal: opts.signal,
+      language: opts.language,
       skipUnderstanding: resumeExistingTask,
       skipPlanning: resumingApprovedAction,
       priorToolResults,
