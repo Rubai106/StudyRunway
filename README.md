@@ -38,6 +38,20 @@ vitest 3.2.7 · Playwright 1.64.1 · three 0.182 + @react-three/fiber 9.4.2 + dr
 (3D tool visualizer) · zod 3.24.2 (domain validation) · pdfjs-dist (local PDF evidence
 extraction) · sharp 0.35.5.
 
+## Local setup and Google sign-in
+
+**Important:** Google sign-in is required to use StudyRunway, including its no-AI-key demo. The demo does not require an AI provider key, but it is not an authentication bypass.
+
+For local development:
+
+1. Copy `.env.example` to `.env.local` in the project root.
+2. In [Google Cloud Console](https://console.cloud.google.com/), configure the OAuth consent screen and create an OAuth client ID with application type **Web application**.
+3. Add this authorized redirect URI to the OAuth client: `http://localhost:3000/api/auth/callback/google`.
+4. Set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` in `.env.local` to the client ID and client secret. Generate a unique `AUTH_SECRET` for this environment. Leave `AUTH_URL` unset for local development.
+5. Restart `npm run dev` and sign in with a Google account whose email is verified. If the OAuth consent screen is in Testing mode, add your account as a test user.
+
+Keep `.env.local` out of Git and never commit OAuth secrets. These website sign-in settings are separate from AI provider credentials such as `GEMINI_API_KEY`. See [Google website sign-in setup](docs/SETUP.md#google-website-sign-in) for the full instructions and deployed callback URL.
+
 ## What's here
 
 - `src/lib/` — the deterministic financial engine copied verbatim from the old
