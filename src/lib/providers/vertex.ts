@@ -18,6 +18,7 @@ import type {
 
 export const DEFAULT_VERTEX_AI_LOCATION = "global";
 export const DEFAULT_VERTEX_AI_MODEL = "google/gemini-3.5-flash";
+export const DEFAULT_VERTEX_AI_TIMEOUT_MS = 90_000;
 const CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 const PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const LOCATION_PATTERN = /^(?:global|[a-z0-9]+(?:-[a-z0-9]+)*)$/;
@@ -34,6 +35,13 @@ function normalizeModel(value: string | undefined): string | null {
     return null;
   }
   return model;
+}
+
+function readVertexTimeoutMs(): number {
+  const configured = Number.parseInt(process.env.VERTEX_AI_TIMEOUT_MS ?? "", 10);
+  return Number.isSafeInteger(configured) && configured >= 10_000 && configured <= 150_000
+    ? configured
+    : DEFAULT_VERTEX_AI_TIMEOUT_MS;
 }
 
 export interface VertexConfig {
@@ -155,6 +163,13 @@ export function createVertexProvider(
         model: cfg.model,
         messages: toWireMessages(messages),
       };
+      // Gemini 3 defaults to medium reasoning. The agent verifies financial
+      // figures with deterministic tools, so low reasoning keeps the model's
+      // routing/planning calls responsive without delegating calculations to it.
+      if (/^google\/gemini-3(?:\.|-)/i.test(cfg.model)) {
+        body.reasoning_effort = "low";
+        body.max_tokens = 4096;
+      }
       if (options?.responseFormat === "json_object") {
         body.response_format = { type: "json_object" };
       } else if (options?.responseFormat?.type === "json_schema") {
@@ -181,7 +196,7 @@ export function createVertexProvider(
       const raw = (await fetchImpl(url, {
         headers: { Authorization: `Bearer ${token}` },
         body,
-        timeoutMs: 45_000,
+        timeoutMs: readVertexTimeoutMs(),
       })) as VertexChatResponse;
 
       const choice = raw.choices?.[0];

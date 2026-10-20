@@ -453,13 +453,14 @@ function ChatWorkspaceContent() {
   const retry = useCallback(() => {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     if (!lastUser || streaming || lastUser.text.includes("[Attached document:")) return;
-    // Drop any trailing failed/stopped assistant message before retrying.
+    // Drop the failed assistant turn before retrying, but keep the original
+    // user bubble. Retrying is a continuation of that turn, not a new prompt.
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.id === lastUser.id);
       return prev.slice(0, idx + 1);
     });
     // Defer so state settles first.
-    window.setTimeout(() => sendMessage(lastUser.text), 0);
+    window.setTimeout(() => sendMessage(lastUser.text, { showUserMessage: false }), 0);
   }, [messages, sendMessage, streaming]);
 
   const markAnswered = useCallback((messageId: string, questionId: string) => {

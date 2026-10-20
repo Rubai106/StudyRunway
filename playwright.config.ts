@@ -1,14 +1,18 @@
 import { defineConfig, devices } from "@playwright/test";
+import path from "node:path";
+import { E2E_AUTH_SECRET } from "./tests/e2e/auth-state";
 
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 90_000,
+  globalSetup: "./tests/e2e/global-setup.ts",
   // The demo server compiles route bundles on demand. Keep browser pressure
   // bounded so concurrent workers cannot exhaust local resources and turn an
   // HMR-chunk load failure into a false product regression.
   workers: 2,
   use: {
     baseURL: "http://localhost:3100",
+    storageState: path.join(process.cwd(), "test-results", "e2e-auth-state.json"),
   },
   webServer: {
     command: "npm run dev -- -p 3100",
@@ -21,6 +25,9 @@ export default defineConfig({
       GEMINI_API_KEY: "PLACEHOLDER",
       OPENAI_API_KEY: "PLACEHOLDER",
       ANTHROPIC_API_KEY: "PLACEHOLDER",
+      AUTH_SECRET: E2E_AUTH_SECRET,
+      AUTH_GOOGLE_ID: "e2e-client-id",
+      AUTH_GOOGLE_SECRET: "e2e-client-secret",
     },
     url: "http://localhost:3100",
     // Never accidentally test a stale app from another extracted ZIP. Opt in to

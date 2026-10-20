@@ -15,11 +15,12 @@ import {
   executeToolCall,
   sanitizeForModel,
   DEMO_LABEL,
+  DETERMINISTIC_DEMO_LABEL,
   DEMO_SAMPLE_ARGS,
   AgentEventSchemas,
   type AgentEvent,
 } from "../orchestrator";
-import { clearStore, createTask, getTask, updateTask } from "../state";
+import { clearStore, createTask, getTask, recordToolCall, updateTask } from "../state";
 import { PING_TOOL } from "../registry";
 import { buildLivingCostPlanTool } from "../../tools/buildLivingCostPlan";
 import { extractDocumentTool } from "../../tools/extractDocument";
@@ -321,8 +322,44 @@ describe("model-driven loop", () => {
       expect(answer.text).toContain("Contact the university billing office");
       expect(answer.text).toContain("scholarship release date");
     }
-    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls).toHaveLength(0);
     expect(getTask("s-tuition-shortfall-preflight")?.status).toBe("done");
+  });
+
+  it("grounds natural-language tuition dates for both the funding check and action plan", async () => {
+    const provider = new ScriptedProvider([
+      json({ ...UNDERSTANDING, currencies: ["USD"], questions: [] }),
+      json(PLAN),
+      toolTurn([{ id: "natural-gap", name: "analyze_funding_gap", args: {} }]),
+      toolTurn([{ id: "natural-actions", name: "build_action_plan", args: {} }]),
+      textOnly("No—not by the stated deadline: there is a US$2,000.00 gap. The scholarship is expected after tuition is due. Prioritized next steps: contact the university billing office, confirm the scholarship release date, and ask about verified emergency support."),
+    ], "vertex");
+    const message =
+      "Demo scenario: I have $3,000 in confirmed savings. Tuition is $5,000 due November 15, 2026. " +
+      "A $2,000 scholarship is expected November 29, 2026, but may be delayed. " +
+      "$800 is reserved for rent and food and cannot be used for tuition. " +
+      "Will I meet the deadline? Calculate the gap and give urgent next steps.";
+    const events = await collect(runAgent({
+      sessionId: "s-tu-shortfall-natural-language",
+      message,
+      tools: [PING_TOOL, analyzeFundingGapTool, buildActionPlanTool],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    expect(events.find((event) => event.type === "tool_call_end" && event.tool === "analyze_funding_gap"))
+      .toMatchObject({ ok: true });
+    expect(events.find((event) => event.type === "tool_call_end" && event.tool === "build_action_plan"))
+      .toMatchObject({ ok: true });
+    expect(events.find((event) => event.type === "result" && event.component === "financial_outcome"))
+      .toMatchObject({ data: { hasGap: true, shortfallMinor: 200_000, gapDate: "2026-11-15", verified: true } });
+    const result = events.find((event) => event.type === "result" && event.component === "financial_outcome");
+    expect(result?.type).toBe("result");
+    if (result?.type === "result") {
+      expect(result.data["summary"]).toContain("Prioritized next steps:");
+      expect(result.data["actionPlan"]).toMatchObject({ actions: expect.any(Array) });
+    }
   });
 
   it("does not misroute a university email draft to the tuition timing form", async () => {
@@ -474,6 +511,273 @@ describe("model-driven loop", () => {
     expect(normalizedArgs).toMatchObject({ fromCurrency: "USD", toCurrency: "GBP", amountMinor: 120000, deadlineIso: "2026-10-20", objective: "balanced" });
   });
 
+  it("compares an explicit transfer corridor deterministically without waiting on Vertex", async () => {
+    let receivedArgs: Record<string, unknown> | undefined;
+    const captureTransferTool = {
+      ...compareTransfersTool,
+      handler: async (args: Record<string, unknown>, context: Parameters<typeof compareTransfersTool.handler>[1]) => {
+        receivedArgs = args;
+        return compareTransfersTool.handler(args, context);
+      },
+    };
+    const provider = new ScriptedProvider([], "vertex");
+    const events = await collect(runAgent({
+      sessionId: "s-transfer-reference-fast-path",
+      message: "Demo transfer comparison: I need to send USD 500 to EUR for tuition due November 15, 2026. Compare viable providers by amount received after FX margin, sender and recipient fees, delivery time, and deadline. I have no provider quote yet. Do not invent a rate, fee, delivery estimate, or say a provider is best without a live quote.",
+      tools: [PING_TOOL, captureTransferTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    expect(receivedArgs).toMatchObject({
+      amountMinor: 50000,
+      fromCurrency: "USD",
+      toCurrency: "EUR",
+      deadlineIso: "2026-11-15",
+    });
+    expect(events.some((event) => event.type === "tool_call_end" && event.tool === "compare_transfers" && event.ok)).toBe(true);
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "transfer_comparison" });
+    if (result?.type === "result") {
+      expect(result.data["requestedDeadline"]).toBe("2026-11-15");
+      expect(result.data["summary"]).toContain("No reference quotes");
+      expect(result.data["summary"]).toContain("not a live provider quote");
+      expect(result.data["verified"]).toBe(true);
+    }
+  });
+
+  it("asks for missing transfer amount and currencies without waiting on Vertex, then resumes safely", async () => {
+    const sessionId = "s-transfer-missing-details";
+    const provider = new ScriptedProvider([], "vertex");
+    const message = "Demo only: compare sending the BDT equivalent of €3,000 from Bangladesh to Ireland for tuition by 2026-12-01. Show fees and amount received; do not invent a quote.";
+    const clarificationEvents = await collect(runAgent({
+      sessionId,
+      message,
+      tools: [PING_TOOL, compareTransfersTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(clarificationEvents);
+    expect(provider.calls).toHaveLength(0);
+    const clarification = clarificationEvents.find((event) => event.type === "clarify");
+    expect(clarification?.type).toBe("clarify");
+    if (clarification?.type !== "clarify") throw new Error("Expected transfer detail form");
+    expect(clarification.questions[0]).toMatchObject({
+      id: "transfer-details",
+      kind: "form",
+      fields: [
+        { name: "sendAmount", type: "number", required: true },
+        { name: "sendCurrency", type: "select", required: true },
+        { name: "receiveCurrency", type: "select", required: true },
+        { name: "deadline", type: "date", required: false },
+      ],
+    });
+
+    expect(submitAnswers(sessionId, "transfer-details", {
+      sendAmount: "1200000",
+      sendCurrency: "BDT",
+      receiveCurrency: "GBP",
+      deadline: "2026-12-01",
+    })).toEqual({ ok: true });
+    const resumed = await collect(runAgent({
+      sessionId,
+      message: "",
+      tools: [PING_TOOL, compareTransfersTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(resumed);
+    expect(provider.calls).toHaveLength(0);
+    const result = resumed.find((event) => event.type === "result");
+    if (!result) throw new Error(JSON.stringify(resumed));
+    expect(result).toMatchObject({ component: "transfer_comparison" });
+    if (result?.type === "result") {
+      expect(result.data).toMatchObject({ corridor: "BDT>GBP", requestedDeadline: "2026-12-01" });
+      expect(result.data["requestedAmount"]).toContain("1,200,000");
+      expect(result.data["ranked"]).toHaveLength(2);
+    }
+  });
+
+  it("gives immediate cautious guidance for a pre-viewing rental bank-transfer risk", async () => {
+    const provider = new ScriptedProvider([], "vertex");
+    const events = await collect(runAgent({
+      sessionId: "s-rental-risk-fast-path",
+      message: "Demo only. A landlord in Germany wants €1,100 by bank transfer before I arrive to view the apartment. I have not paid. Could this be a scam? Give safe checks, but do not claim you verified the listing.",
+      tools: [PING_TOOL],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    const answer = events.filter((event) => event.type === "assistant_text").map((event) => event.text).join("\n");
+    expect(answer).toContain("high-risk request");
+    expect(answer).toContain("do not prove it is a scam");
+    expect(answer).toContain("Do not send the deposit yet");
+    expect(answer).toContain("I have not verified the listing");
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+
+  it("routes explicit official policy research straight to the grounded tool", async () => {
+    let receivedArgs: Record<string, unknown> | undefined;
+    const policyTool: ToolDefinition = {
+      name: "research_policy",
+      description: "Search official sources and return supported student-finance policy claims.",
+      parameters: z.object({ query: z.string(), topic: z.string(), country: z.string() }),
+      requiresApproval: false,
+      handler: async (args) => {
+        receivedArgs = args;
+        return {
+          ok: true,
+          summary: "Official policy research checked one source page at 2026-10-20T00:00:00.000Z. The official page describes the requirement.",
+          data: {
+            answer: "The official page describes the requirement.",
+            topic: args["topic"],
+            country: args["country"],
+            checkedAt: "2026-10-20T00:00:00.000Z",
+            sources: [{ title: "Official page", uri: "https://example.gov.au/visa", domain: "example.gov.au" }],
+            supportedClaims: [{
+              text: "The official page describes the requirement.",
+              sources: [{ title: "Official page", uri: "https://example.gov.au/visa", domain: "example.gov.au" }],
+            }],
+          },
+        };
+      },
+    };
+    const provider = new ScriptedProvider([]);
+    const events = await collect(runAgent({
+      sessionId: "s-policy-direct-route",
+      message: "Demo research only. Find the official Australian government page about financial capacity or proof-of-funds requirements for an international student visa (subclass 500). Summarize what the official page requires, cite its official source URL, show when you checked it, and distinguish a visa requirement from a university estimate.",
+      tools: [PING_TOOL, policyTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    expect(receivedArgs).toMatchObject({ topic: "proof_of_funds", country: "Australia" });
+    expect(receivedArgs?.["query"]).not.toContain("500.00");
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "policy_research" });
+    if (result?.type === "result") expect(result.data["verified"]).toBe(true);
+  });
+
+  it("routes a fully stated delayed-pay crisis through deterministic forecast tools without model latency", async () => {
+    const provider = new ScriptedProvider([]);
+    const events = await collect(runAgent({
+      sessionId: "s-income-shock-direct-route",
+      message: [
+        "Demo scenario only.",
+        "Cash available now is USD 500.",
+        "Expected work paycheck USD 400 is due 2026-11-05 and is delayed by 14 days.",
+        "Rent USD 300 is due 2026-11-08.",
+        "Tuition USD 1,000 is due 2026-11-19.",
+        "Simulate the delayed paycheck and show the shortfall by deadline. Do not assume a loan or scholarship.",
+      ].join("\n"),
+      tools: [PING_TOOL, analyzeFundingGapTool, simulateScenarioTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls).toHaveLength(0);
+    expect(events.some((event) => event.type === "tool_call_end" && event.tool === "analyze_funding_gap" && event.ok)).toBe(true);
+    expect(events.some((event) => event.type === "tool_call_end" && event.tool === "simulate_scenario" && event.ok)).toBe(true);
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "scenario_comparison" });
+    if (result?.type === "result") {
+      expect(result.data["verified"]).toBe(true);
+      expect(result.data["scenario"]).toMatchObject({ gapDate: "2026-11-19", shortfall: "US$400.00" });
+      expect(result.data["summary"]).toContain("No loan, scholarship, or other backup funding was assumed");
+    }
+  });
+
+  it("keeps a transfer result summary when the same request also calculates a funding gap", async () => {
+    const sessionId = "s-transfer-and-funding-summary";
+    createTask(sessionId);
+    recordToolCall(sessionId, {
+      id: "prior-gap-check",
+      tool: "analyze_funding_gap",
+      argsSummary: "verified funding check",
+      args: {},
+      ok: true,
+      summary: "No funding gap in the forecast window. Lowest projected balance: US$0.00 on 19 Nov 2026.",
+    });
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{
+        id: "transfer-with-funding",
+        name: "compare_transfers",
+        args: {
+          amountMinor: 50_000,
+          fromCurrency: "USD",
+          toCurrency: "EUR",
+          deadlineIso: "2026-11-19",
+          objective: "balanced",
+        },
+      }]),
+      textOnly("Both the transfer comparison and tuition gap were calculated."),
+      textOnly("The transfer corridor has no reference quotes; nothing was invented."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId,
+      message: "Compare sending USD 500 from the US to EUR for tuition due 2026-11-19 and check whether my USD 500 cash covers the USD 1,000 tuition bill.",
+      tools: [PING_TOOL, compareTransfersTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    const result = events.find((event) => event.type === "result");
+    expect(result).toMatchObject({ component: "transfer_comparison" });
+    if (result?.type === "result") {
+      expect(result.data["summary"]).toContain("reference quotes");
+      expect(result.data["summary"]).not.toContain("No funding gap in the forecast window");
+    }
+  });
+
+  it("does not expose transfer comparison to an income-shock task or render a failed transfer call", async () => {
+    const scenarioTool: ToolDefinition = {
+      name: "simulate_scenario",
+      description: "Simulate a user-stated delayed-pay scenario against a dated funding plan.",
+      parameters: z.object({ scenario: z.record(z.unknown()), plan: z.unknown().optional() }),
+      requiresApproval: false,
+      handler: async () => ({
+        ok: true,
+        summary: "The delayed-pay scenario leaves a shortfall before the tuition deadline.",
+        data: { scenarioType: "income_shock", summary: "Demo calculation completed." },
+      }),
+    };
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([
+        { id: "wrong-transfer", name: "compare_transfers", args: {} },
+        { id: "income-shock", name: "simulate_scenario", args: { scenario: { type: "income_shock" } } },
+      ]),
+      textOnly("The income-shock tool completed."),
+      textOnly("The delayed paycheck creates a shortfall before the tuition deadline."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-income-shock-tool-allowlist",
+      message: "Demo only. My USD 500 cash, USD 400 paycheck is delayed 14 days from 2026-11-05; rent USD 300 due 2026-11-08 and tuition USD 1,000 due 2026-11-19. Simulate the income shock.",
+      tools: [PING_TOOL, compareTransfersTool, scenarioTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    const toolRequest = provider.calls.find((call) => call.tools.length > 0);
+    expect(toolRequest?.tools.map((tool) => tool.name)).not.toContain("compare_transfers");
+    expect(events.some((event) => event.type === "tool_call_start" && event.tool === "compare_transfers")).toBe(false);
+    expect(events.find((event) => event.type === "result")).toMatchObject({ component: "scenario_comparison" });
+  });
+
   it("preserves stated Safe-to-Send facts and leaves unknown approval facts missing", async () => {
     const provider = new ScriptedProvider([
       json(UNDERSTANDING),
@@ -524,6 +828,31 @@ describe("model-driven loop", () => {
       expect(draft["quotes"]).toHaveLength(1);
       expect(draft["fundingRecords"]).toHaveLength(1);
     }
+  });
+
+  it("passes the current user-provided country context to the research tool", async () => {
+    let receivedUserRequest = "";
+    const researchPolicy: ToolDefinition = {
+      name: "research_policy",
+      description: "Research official student-finance policies.",
+      parameters: z.object({ query: z.string(), topic: z.string(), country: z.string() }),
+      requiresApproval: false,
+      handler: async (_args, ctx): Promise<ToolResult> => {
+        receivedUserRequest = ctx.userRequest ?? "";
+        return { ok: true, summary: "No verified policy answer returned.", data: { answer: null } };
+      },
+    };
+
+    const events = await collect(runAgent({
+      sessionId: "s-policy-current-user-context",
+      message: "Find official proof-of-funds requirements for international students. Country: Australia. Use an official government source.",
+      tools: [PING_TOOL, researchPolicy],
+      provider: new ScriptedProvider([]),
+    }));
+
+    expectValidEvents(events);
+    expect(receivedUserRequest).toContain("Country: Australia");
+    expect(events.some((event) => event.type === "result" && event.component === "policy_research")).toBe(true);
   });
 
   it("does not allow a failed policy lookup to fall back to unsourced advice", async () => {
@@ -656,14 +985,17 @@ describe("model-driven loop", () => {
     const events = await collect(runAgent({
       sessionId: "s-grounded-timeout",
       message: "My scholarship of USD 3,000 is expected to arrive 2026-11-03. I have USD 2,000 available. My committed tuition bill of USD 5,000 is due 2026-11-01. Can I still pay on time?",
-      tools: [PING_TOOL],
+      tools: [PING_TOOL, analyzeFundingGapTool, buildActionPlanTool],
       provider,
     }));
 
     expectValidEvents(events);
     expect(events.some((event) => event.type === "error")).toBe(false);
     expect(events.some((event) => event.type === "clarify")).toBe(false);
-    expect(events.some((event) => event.type === "assistant_text" && event.text.includes("timed out during request classification"))).toBe(true);
+    expect(provider.chat).not.toHaveBeenCalled();
+    expect(events.some((event) => event.type === "assistant_text" && event.text.includes("timed out during request classification"))).toBe(false);
+    expect(events.find((event) => event.type === "result" && event.component === "financial_outcome"))
+      .toMatchObject({ data: { hasGap: true, shortfallMinor: 300_000, gapDate: "2026-11-01" } });
     expect(getTask("s-grounded-timeout")?.status).toBe("done");
   });
 
@@ -1258,9 +1590,13 @@ describe("explicit deterministic demos", () => {
 
     expectValidEvents(events);
     expect(provider.calls).toHaveLength(0);
+    const assistantText = events.filter((event) => event.type === "assistant_text").map((event) => event.text).join(" ");
+    expect(assistantText).toContain(DETERMINISTIC_DEMO_LABEL);
+    expect(assistantText).not.toContain(DEMO_LABEL);
     const result = events.find((event) => event.type === "result");
     expect(result).toMatchObject({ component: "living_cost_plan" });
     if (result?.type === "result") {
+      expect(result.data["note"]).toBe(DETERMINISTIC_DEMO_LABEL);
       const plan = result.data["plan"] as { destinationId?: string; verdict?: string; sources?: unknown[] };
       expect(plan.destinationId).toBe("ie-limerick");
       expect(plan.verdict).toBe("shortfall");
@@ -1279,6 +1615,9 @@ describe("explicit deterministic demos", () => {
 
     expectValidEvents(events);
     expect(provider.calls).toHaveLength(0);
+    const assistantText = events.filter((event) => event.type === "assistant_text").map((event) => event.text).join(" ");
+    expect(assistantText).toContain(DETERMINISTIC_DEMO_LABEL);
+    expect(assistantText).not.toContain(DEMO_LABEL);
     const result = events.find((event) => event.type === "result");
     expect(result).toMatchObject({ component: "safe_to_send_decision" });
     expect(events.some((event) => event.type === "tool_call_start" && event.tool === "simulate_safe_to_send_payment")).toBe(false);

@@ -6,7 +6,7 @@
  * - The sample plan (src/lib/sample.ts) produces a £278.00 shortfall
  *   opening on today+20 days (2026-11-04 when today is 2026-10-15).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { addDaysISO, todayISO } from "../model";
 import { buildForecast } from "../forecast";
@@ -204,6 +204,33 @@ describe("analyze_funding_gap", () => {
     expect(result.data).toMatchObject({ hasGap: true, gapDate: "2026-10-30", shortfallMinor: 90_000 });
   });
 
+  it("parses named month dates and excludes an explicitly protected living-cost reserve", () => {
+    const input = extractFundingGapInputFromText(
+      "I have $3,000 in confirmed savings. Tuition is $5,000 due November 15, 2026. " +
+      "A $2,000 scholarship is expected November 29, 2026, but may be delayed. " +
+      "$800 is reserved for rent and food and cannot be used for tuition.",
+    );
+
+    expect(input).not.toBeNull();
+    expect(input).toMatchObject({
+      planningCurrency: "USD",
+      fundingSources: [
+        { amount: 3000, currency: "USD", status: "confirmed_available" },
+        { amount: 2000, currency: "USD", status: "estimated", expectedDate: "2026-11-29", kind: "scholarship" },
+      ],
+      obligations: [
+        { amount: 5000, currency: "USD", dueDate: "2026-11-15", kind: "tuition", status: "committed" },
+      ],
+    });
+  });
+
+  it("rejects impossible named calendar dates rather than normalizing them", () => {
+    const input = extractFundingGapInputFromText(
+      "I have USD 500 available. Tuition of USD 1,000 is due February 30, 2027.",
+    );
+    expect(input).toBeNull();
+  });
+
   it("keeps an expected scholarship uncertain and shows the confirmed-only shortfall", async () => {
     const input = extractFundingGapInputFromText(
       "As of 2026-10-20. Tuition of USD 1,000 is committed and due in 30 days. " +
@@ -379,6 +406,19 @@ describe("compare_transfers", () => {
     }
   });
 
+  it("never ranks a reference quote whose send amount differs from the request", async () => {
+    const result = await compareTransfersTool.handler({
+      ...baseArgs,
+      amountMinor: 50_000_000, // ৳500,000; the reference quotes are for ৳1,200,000
+    }, CTX);
+    expect(result.ok).toBe(true);
+    expect(result.data!.ranked).toHaveLength(0);
+    const excluded = result.data!.excluded as { amountNote: string | null; exclusionReason: string }[];
+    expect(excluded.length).toBeGreaterThan(0);
+    expect(excluded.some((quote) => /not scaled/i.test(quote.amountNote ?? "") && /cannot be ranked/i.test(quote.exclusionReason))).toBe(true);
+    expect(result.summary).not.toContain("top =");
+  });
+
   it("excludes quotes that miss the deadline from ranking", async () => {
     const result = await compareTransfersTool.handler(baseArgs, CTX);
     const data = result.data!;
@@ -391,12 +431,24 @@ describe("compare_transfers", () => {
 
   it("reports honestly when the corridor has no reference quotes", async () => {
     const result = await compareTransfersTool.handler(
-      { amountMinor: 100_00, fromCurrency: "USD", toCurrency: "JPY", objective: "balanced" },
+      {
+        amountMinor: 100_00,
+        fromCurrency: "USD",
+        toCurrency: "JPY",
+        deadlineIso: "2026-11-19",
+        objective: "balanced",
+      },
       CTX,
     );
     expect(result.ok).toBe(true);
     expect(result.data!.ranked).toHaveLength(0);
     expect(result.summary).toContain("No reference quotes");
+    expect(result.data).toMatchObject({
+      corridor: "USD>JPY",
+      requestedAmountMinor: 10_000,
+      requestedAmount: "US$100.00",
+      requestedDeadline: "2026-11-19",
+    });
   });
 });
 
@@ -445,6 +497,84 @@ describe("extract_document", () => {
 });
 
 describe("simulate_scenario", () => {
+  it("reports the balance after every bill deadline for an income-shock comparison", async () => {
+    const plan = samplePlanInput();
+    const savingsTemplate = plan.fundingSources[0]!;
+    const incomeTemplate = plan.fundingSources.find((source) => source.kind === "income")!;
+    plan.planningCurrency = "USD";
+    plan.fx = { ...plan.fx, rates: {}, source: "No exchange-rate assumption provided" };
+    plan.fundingSources = [
+      {
+        ...savingsTemplate,
+        id: "demo-cash",
+        label: "Cash available now",
+        kind: "savings",
+        amountMinor: 50_000,
+        currency: "USD",
+        status: "confirmed_available",
+        availableDate: null,
+        expectedDate: null,
+        evidenceIds: [],
+      },
+      {
+        ...incomeTemplate,
+        id: "demo-paycheck",
+        label: "Expected work paycheck",
+        kind: "income",
+        amountMinor: 40_000,
+        currency: "USD",
+        status: "estimated",
+        availableDate: null,
+        expectedDate: "2026-11-05",
+        evidenceIds: [],
+      },
+    ];
+    plan.obligations = [
+      {
+        ...plan.obligations[0]!,
+        id: "demo-rent",
+        label: "Rent",
+        kind: "rent",
+        amountMinor: 30_000,
+        currency: "USD",
+        dueDate: "2026-11-08",
+        recurring: null,
+        status: "committed",
+        evidenceIds: [],
+      },
+      {
+        ...plan.obligations[1]!,
+        id: "demo-tuition",
+        label: "Tuition",
+        kind: "tuition",
+        amountMinor: 100_000,
+        currency: "USD",
+        dueDate: "2026-11-19",
+        recurring: null,
+        status: "committed",
+        evidenceIds: [],
+      },
+    ];
+
+    const result = await simulateScenarioTool.handler({
+      plan,
+      scenario: { type: "income_shock", sourceId: "demo-paycheck", delayDays: 14, reductionPercent: 0 },
+      recoveryOptions: [],
+    }, CTX);
+
+    expect(result.ok).toBe(true);
+    const baseline = result.data!.baseline as { deadlineBalances: Record<string, unknown>[] };
+    const scenario = result.data!.scenario as { deadlineBalances: Record<string, unknown>[] };
+    expect(baseline.deadlineBalances.map((row) => [row["date"], row["label"], row["balanceAfter"]])).toEqual([
+      ["2026-11-08", "Rent", "US$600.00"],
+      ["2026-11-19", "Tuition", "-US$400.00"],
+    ]);
+    expect(scenario.deadlineBalances).toMatchObject([
+      { date: "2026-11-08", label: "Rent", balanceAfter: "US$200.00", shortfall: null },
+      { date: "2026-11-19", label: "Tuition", shortfall: "US$400.00" },
+    ]);
+  });
+
   it("computes baseline-vs-scenario diff math for an expense increase", async () => {
     const input = samplePlanInput();
     const before = JSON.stringify(input);
@@ -517,6 +647,46 @@ describe("simulate_scenario", () => {
 });
 
 describe("research_policy", () => {
+  it("uses current orchestrator user context when stored task state has no country", async () => {
+    const previousBackend = process.env.AI_BACKEND;
+    vi.stubEnv("AI_BACKEND", "demo");
+    try {
+      const result = await researchPolicyTool.handler(
+        { query: "official proof of funds for a student visa", topic: "proof_of_funds", country: "" },
+        { ...CTX, userRequest: "Find official proof-of-funds rules.\nCountry: Australia" },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.data).toMatchObject({ country: "Australia" });
+      expect(result.data?.needsClarification).not.toBe(true);
+      expect(result.data?.note).not.toBe("No search was performed.");
+    } finally {
+      vi.unstubAllEnvs();
+      if (previousBackend === undefined) delete process.env.AI_BACKEND;
+      else process.env.AI_BACKEND = previousBackend;
+    }
+  });
+
+  it("retains country context stated with a demonym instead of the country name", async () => {
+    const previousBackend = process.env.AI_BACKEND;
+    vi.stubEnv("AI_BACKEND", "demo");
+    try {
+      const result = await researchPolicyTool.handler(
+        { query: "official visa financial-capacity requirements", topic: "proof_of_funds", country: "Australia" },
+        { ...CTX, userRequest: "Find current Australian government proof-of-funds rules for subclass 500." },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.data).toMatchObject({ country: "Australia" });
+      expect(result.data?.needsClarification).not.toBe(true);
+      expect(result.data?.note).not.toBe("No search was performed.");
+    } finally {
+      vi.unstubAllEnvs();
+      if (previousBackend === undefined) delete process.env.AI_BACKEND;
+      else process.env.AI_BACKEND = previousBackend;
+    }
+  });
+
   it("uses Google's recommended temperature for grounded search requests", async () => {
     let requestBody: Record<string, unknown> = {};
     const input = ResearchPolicyParams.parse({
@@ -535,8 +705,36 @@ describe("research_policy", () => {
       },
     });
 
-    expect(requestBody.generationConfig).toMatchObject({ temperature: 1.0 });
+    expect(requestBody.generationConfig).toMatchObject({ temperature: 0.0 });
     expect(requestBody.tools).toEqual([{ googleSearch: {} }]);
+  });
+
+  it("does not say Search Suggestions are disabled when Vertex returned suggestion chips without citations", async () => {
+    const input = ResearchPolicyParams.parse({
+      query: "official proof-of-funds rules for Australian student visa subclass 500",
+      topic: "proof_of_funds",
+      country: "Australia",
+    });
+
+    const result = await runGroundedPolicyResearch(input, {
+      projectId: "test-project-12345",
+      location: "global",
+      tokenSource: async () => "test-token",
+      fetchJson: async () => ({
+        candidates: [{
+          content: { parts: [{ text: "A response without claim-level citations." }] },
+          groundingMetadata: {
+            webSearchQueries: ["Australian student visa financial requirements official"],
+            searchEntryPoint: { renderedContent: "<div>Google Search suggestions</div>" },
+          },
+        }],
+      }),
+    });
+
+    expect(result.answer).toBeNull();
+    expect(result.note).toContain("returned Google Search suggestions, but no page-level citations");
+    expect(result.note).not.toContain("Suggestions are enabled");
+    expect(result.searchEntryPointHtml).toContain("Google Search suggestions");
   });
 
   it("asks for location context before searching and never fabricates a citation", async () => {

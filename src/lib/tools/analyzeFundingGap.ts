@@ -141,6 +141,30 @@ function explicitDates(text: string, referenceDate: string): DatedMention[] {
     const start = match.index ?? 0;
     return [{ date, start, end: start + date.length }];
   });
+  const monthNames = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+  ];
+  const monthPattern = monthNames.join("|");
+  const namedDatePattern = new RegExp(
+    `\\b(?:(?<monthFirst>${monthPattern})\\s+(?<dayFirst>\\d{1,2})(?:st|nd|rd|th)?[,]?\\s+(?<yearFirst>\\d{4})|(?<daySecond>\\d{1,2})(?:st|nd|rd|th)?\\s+(?<monthSecond>${monthPattern})[,]?\\s+(?<yearSecond>\\d{4}))\\b`,
+    "gi",
+  );
+  const namedDates = [...text.matchAll(namedDatePattern)].flatMap((match) => {
+    const groups = match.groups;
+    const monthName = (groups?.monthFirst ?? groups?.monthSecond)?.toLowerCase();
+    const day = Number(groups?.dayFirst ?? groups?.daySecond);
+    const year = Number(groups?.yearFirst ?? groups?.yearSecond);
+    const month = monthName ? monthNames.indexOf(monthName) : -1;
+    if (month < 0 || !Number.isInteger(day) || day < 1 || day > 31 || !Number.isInteger(year)) return [];
+    const date = new Date(Date.UTC(year, month, day));
+    // Reject impossible dates such as February 30 instead of normalizing them.
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day) return [];
+    const iso = date.toISOString().slice(0, 10);
+    if (!ISO_DATE.safeParse(iso).success) return [];
+    const start = match.index ?? 0;
+    return [{ date: iso, start, end: start + match[0].length }];
+  });
   const numberWords: Record<string, number> = {
     a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5,
     six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
@@ -152,7 +176,7 @@ function explicitDates(text: string, referenceDate: string): DatedMention[] {
     const start = match.index ?? 0;
     return date ? [{ date, start, end: start + match[0].length }] : [];
   });
-  return [...absoluteDates, ...relativeDates];
+  return [...absoluteDates, ...namedDates, ...relativeDates].sort((a, b) => a.start - b.start);
 }
 
 function nearestAssociatedDate(dates: DatedMention[], amountOffset: number): string | undefined {
@@ -216,7 +240,11 @@ function financialClauseAround(text: string, start: number, end: number): { text
     if (sentence.text[index] !== ",") return false;
     const previous = sentence.text[index - 1] ?? "";
     const next = sentence.text[index + 1] ?? "";
-    return !(/\d/.test(previous) && /\d/.test(next));
+    if (/\d/.test(previous) && /\d/.test(next)) return false;
+    const prefix = sentence.text.slice(0, index);
+    const suffix = sentence.text.slice(index + 1);
+    const isNamedDateYearComma = /\b\d{1,2}(?:st|nd|rd|th)?$/.test(prefix) && /^\s+\d{4}\b/.test(suffix);
+    return !isNamedDateYearComma;
   };
   let left = 0;
   for (let i = localStart - 1; i >= 0; i -= 1) {
@@ -265,6 +293,14 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
     // unrelated savings (and vice versa).
     const clause = financialClauseAround(text, mention.start, mention.end);
     const nearby = clause.text;
+    // A reserved living-cost buffer is neither tuition cash nor a bill unless
+    // the user separately states an obligation and due date. Exclude this
+    // explicit carve-out instead of letting it invalidate an otherwise
+    // complete tuition forecast.
+    if (/\b(?:reserved|earmarked|set aside)\b/i.test(nearby) &&
+        /\b(?:cannot|can't|not)\s+be\s+used\b/i.test(nearby)) {
+      continue;
+    }
     // A hypothetical or proposed alternative is not part of the baseline
     // forecast. Refuse the full text rather than silently count it as cash.
     if (/\b(?:hypothetical|proposed|backup option|recovery option)\b/i.test(nearby)) return null;

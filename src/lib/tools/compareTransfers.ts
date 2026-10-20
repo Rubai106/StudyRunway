@@ -112,6 +112,9 @@ export const compareTransfersTool: ToolDefinition = {
           data: {
             corridor: `${fromCurrency}>${toCurrency}`,
             objective,
+            requestedAmountMinor: amountMinor,
+            requestedAmount: formatMinor(amountMinor, fromCurrency),
+            requestedDeadline: deadlineIso,
             ranked: [],
             excluded: [],
             figureLabel: REFERENCE_ESTIMATE_LABEL,
@@ -165,7 +168,17 @@ export const compareTransfersTool: ToolDefinition = {
             ? `Reference quote was for ${formatMinor(a.quote.sendAmountMinor, a.quote.sendCurrency)} send — ` +
               `figures are NOT scaled to the requested ${formatMinor(amountMinor, a.quote.sendCurrency)}.`
             : null;
-        if (!a.complete || a.receivedMinor == null || a.totalCostMinor == null) {
+        if (amountNote) {
+          // A reference quote for a different principal is not comparable.
+          // Never rank its unscaled received amount or total cost as if it
+          // described the user's requested transfer.
+          excluded.push({
+            ...entry,
+            amountNote,
+            exclusionReason:
+              `${amountNote} This quote cannot be ranked for the requested send amount.`,
+          });
+        } else if (!a.complete || a.receivedMinor == null || a.totalCostMinor == null) {
           excluded.push({
             ...entry,
             amountNote,

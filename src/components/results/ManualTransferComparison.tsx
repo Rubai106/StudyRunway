@@ -7,7 +7,7 @@ import {
   compareManualTransferQuotes,
   type ManualTransferComparisonInput,
 } from "@/lib/manualTransferComparison";
-import { asString } from "./shared";
+import { asNumber, asString } from "./shared";
 
 interface QuoteDraft {
   provider: string;
@@ -115,7 +115,12 @@ export default function ManualTransferComparison({
   const corridor = asString(data["corridor"]);
   const [sendCurrency, setSendCurrency] = useState(corridor.split(">")[0] || "BDT");
   const [receiveCurrency, setReceiveCurrency] = useState(corridor.split(">")[1] || "GBP");
-  const [sendAmount, setSendAmount] = useState("");
+  const requestedAmountMinor = asNumber(data["requestedAmountMinor"]);
+  const [sendAmount, setSendAmount] = useState(
+    requestedAmountMinor !== null && requestedAmountMinor > 0
+      ? String(toMajor(requestedAmountMinor, corridor.split(">")[0] || "BDT"))
+      : "",
+  );
   const [deadline, setDeadline] = useState(asString(data["requestedDeadline"]));
   const [midMarketRate, setMidMarketRate] = useState("");
   const [objective, setObjective] = useState<ManualTransferComparisonInput["objective"]>("max_received");

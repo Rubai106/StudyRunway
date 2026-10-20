@@ -44,6 +44,11 @@ export default function ScenarioComparison({
   const scenario = data["scenario"];
   const baselineRecord = isRecord(baseline) ? baseline : {};
   const scenarioRecord = isRecord(scenario) ? scenario : {};
+  const baselineDeadlines = asArray<Record<string, unknown>>(baselineRecord["deadlineBalances"]).filter(isRecord);
+  const scenarioDeadlines = asArray<Record<string, unknown>>(scenarioRecord["deadlineBalances"]).filter(isRecord);
+  const baselineDeadlineByKey = new Map(
+    baselineDeadlines.map((item) => [`${asString(item["date"])}|${asString(item["label"])}`, item]),
+  );
   const metrics = baselineRecord["minBalance"] !== undefined || scenarioRecord["minBalance"] !== undefined
     ? [
         { label: "Lowest projected balance", baseline: asString(baselineRecord["minBalance"]), scenario: asString(scenarioRecord["minBalance"]), changed: baselineRecord["minBalance"] !== scenarioRecord["minBalance"] },
@@ -118,6 +123,41 @@ export default function ScenarioComparison({
           </div>
         ))}
       </div>
+      {scenarioDeadlines.length > 0 && (
+        <section className="mt-4" aria-label="Balance after each bill deadline">
+          <h4 className="text-xs font-bold uppercase tracking-wide text-[var(--sr-ink)]/60">Balance after each bill deadline</h4>
+          <p className="mt-1 text-xs text-[var(--sr-ink)]/55">Shows what remains after each bill in the baseline and delayed-pay case.</p>
+          <div className="mt-2 overflow-hidden rounded-xl border border-[var(--sr-line)]">
+            {scenarioDeadlines.map((item) => {
+              const key = `${asString(item["date"])}|${asString(item["label"])}`;
+              const base = baselineDeadlineByKey.get(key);
+              const displayBalance = (record: Record<string, unknown> | undefined) => {
+                if (!record) return "Not available";
+                const shortfall = asString(record["shortfall"]);
+                return shortfall ? `Short by ${shortfall}` : asString(record["balanceAfter"], "Not available");
+              };
+              return (
+                <div key={key} className="grid grid-cols-[minmax(0,1.2fr)_1fr_1fr] gap-2 border-b border-[var(--sr-line)] px-3 py-2 last:border-b-0" role="row">
+                  <div>
+                    <p className="text-xs font-semibold text-[var(--sr-ink)]">{asString(item["label"], "Bill")}</p>
+                    <p className="text-[11px] text-[var(--sr-ink)]/55">{asString(item["date"])}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-[var(--sr-ink)]/50">Baseline</p>
+                    <p className="text-xs tabular-nums text-[var(--sr-ink)]">{displayBalance(base)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-[var(--sr-ink)]/50">Delayed pay</p>
+                    <p className={`text-xs font-semibold tabular-nums ${item["shortfall"] ? "text-[var(--sr-clay)]" : "text-[var(--sr-ink)]"}`}>
+                      {displayBalance(item)}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
       {changedAssumptions.length > 0 && (
         <Disclosure label="Changed assumptions">
           <ul className="list-disc space-y-1 pl-5 text-xs text-[var(--sr-ink)]/80">

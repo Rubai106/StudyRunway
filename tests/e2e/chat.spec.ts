@@ -89,7 +89,11 @@ test.beforeEach(async ({ page }) => {
     consoleErrors;
   if (!LIVE) await installMocks(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  const chat = page.getByRole("button", { name: "Chat", exact: true });
+  if ((page.viewportSize()?.width ?? 1280) < 768) {
+    await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
+  }
+  await chat.click();
 });
 
 test.afterEach(async ({ page }) => {

@@ -122,6 +122,31 @@ function containsUserValue(request: string, value: string): boolean {
   return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, "iu").test(request);
 }
 
+const COUNTRY_DEMONYMS: Record<string, string[]> = {
+  "United States": ["American", "U.S.", "USA"],
+  "United Kingdom": ["British"],
+  "United Arab Emirates": ["Emirati"],
+  "New Zealand": ["New Zealander"],
+  "South Africa": ["South African"],
+  Bangladesh: ["Bangladeshi"],
+  Australia: ["Australian"],
+  Canada: ["Canadian"],
+  Denmark: ["Danish"],
+  Germany: ["German"],
+  Ireland: ["Irish"],
+  India: ["Indian"],
+  Malaysia: ["Malaysian"],
+  Singapore: ["Singaporean"],
+};
+
+function containsCountryOrDemonym(request: string, country: string): boolean {
+  if (containsUserValue(request, country)) return true;
+  return (COUNTRY_DEMONYMS[country] ?? []).some((alias) => {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, "iu").test(request);
+  });
+}
+
 type ConfirmedResearchFact = {
   source: string;
   value: string;
@@ -188,7 +213,7 @@ export function resolveResearchInputFromUserRequest(
   return {
     ...input,
     country: explicitCountry || confirmedResearchValue(confirmedFacts, "country")
-      || (containsUserValue(userRequest, input.country) ? input.country : ""),
+      || (containsCountryOrDemonym(userRequest, input.country) ? input.country : ""),
     institution: explicitInstitution || confirmedResearchValue(confirmedFacts, "institution")
       || (containsUserValue(userRequest, input.institution) ? input.institution : ""),
     // A provider/model-generated hostname must never be treated as user-confirmed.
@@ -259,8 +284,8 @@ export async function runGroundedPolicyResearch(
       },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       tools: [{ googleSearch: {} }],
-      // Google's grounding guidance recommends temperature 1.0 for ideal results.
-      generationConfig: { temperature: 1.0, maxOutputTokens: 1200 },
+      // Google recommends temperature 0.0 for Google Search grounding.
+      generationConfig: { temperature: 0.0, maxOutputTokens: 1200 },
     },
     timeoutMs: RESEARCH_POLICY_REQUEST_TIMEOUT_MS,
   }) as GenerateContentResponse;
@@ -304,8 +329,11 @@ export async function runGroundedPolicyResearch(
       ? "This is country-specific general guidance, not a verification of any rental listing, landlord, property, or payment recipient. Confirm the rules with the linked official authority before paying."
       : "Grounded in official-domain source pages. Check that the terms match your student category and intake.";
   if (!allSourcesOfficial || !answerText || officialSources.length === 0 || supports.length === 0) {
+    const hasSearchSuggestions = Boolean(metadata?.searchEntryPoint?.renderedContent || metadata?.webSearchQueries?.length);
     const note = uniqueSources.length === 0
-      ? "Google Search grounding returned no cited pages. No policy details are available to verify. Confirm Google Search Suggestions are enabled for the Vertex project, then retry."
+      ? hasSearchSuggestions
+        ? "Vertex AI returned Google Search suggestions, but no page-level citations for this query. No policy details are available to verify. Try a more specific question or confirm the requirement on the relevant official page."
+        : "Google Search grounding returned no cited pages or search suggestions. No policy details are available to verify. Check the Vertex project grounding configuration, then retry."
       : !allSourcesOfficial
         ? "The search results did not all pass the official-domain check. No policy answer was returned; provide the university/authority's official domain and try again."
         : supports.length === 0
@@ -343,7 +371,12 @@ export const researchPolicyTool: ToolDefinition = {
   handler: async (args, ctx) => withToolTimeout("research_policy", async (): Promise<ToolResult> => {
     const parsed = ResearchPolicyParams.safeParse(args);
     if (!parsed.success) return { ok: false, summary: `research_policy: invalid parameters — ${zodIssues(parsed.error)}` };
-    const userRequest = getTask(ctx.sessionId)?.originalRequest ?? "";
+    // Prefer the current turn context supplied by the orchestrator. On long
+    // lived browser sessions, looking only at stored task state can miss the
+    // country the user just supplied and incorrectly return "No search was
+    // performed". This field is server-created; model tool arguments cannot
+    // set it.
+    const userRequest = ctx.userRequest || getTask(ctx.sessionId)?.originalRequest || "";
     const confirmedFacts = getTask(ctx.sessionId)?.confirmedFacts ?? [];
     const researchInput = resolveResearchInputFromUserRequest(parsed.data, userRequest, confirmedFacts);
     const { country, institution } = researchInput;

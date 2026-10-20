@@ -334,6 +334,19 @@ export const simulateScenarioTool: ToolDefinition = {
           + scenario.reductionPercent + "% lower).";
         const summary = delayNote + " " + implicationForForecastDiff("income shock", pc, baseline, modified);
         const recoveryOptions = evaluateRecoveryOptions(stressedState, parsed.data.recoveryOptions);
+      const deadlineBalances = (forecast: ForecastResult) => forecast.rows
+        .filter((row) => row.kind === "outflow")
+        .map((row) => {
+          const shortfallMinor = Math.max(0, -row.balanceAfterMinor);
+          return {
+            date: row.date,
+            label: row.label,
+            balanceAfterMinor: row.balanceAfterMinor,
+            balanceAfter: formatMinor(row.balanceAfterMinor, pc),
+            shortfallMinor,
+            shortfall: shortfallMinor > 0 ? formatMinor(shortfallMinor, pc) : null,
+          };
+        });
 
         return {
           ok: true,
@@ -351,6 +364,7 @@ export const simulateScenarioTool: ToolDefinition = {
               gapDate: baseline.firstGap?.date ?? null,
               shortfallMinor: baseline.firstGap?.shortfallMinor ?? null,
               shortfall: baseline.firstGap ? formatMinor(baseline.firstGap.shortfallMinor, pc) : null,
+              deadlineBalances: deadlineBalances(baseline),
             },
             scenario: {
               minBalanceMinor: modified.minBalanceMinor,
@@ -358,6 +372,7 @@ export const simulateScenarioTool: ToolDefinition = {
               gapDate: modified.firstGap?.date ?? null,
               shortfallMinor: modified.firstGap?.shortfallMinor ?? null,
               shortfall: modified.firstGap ? formatMinor(modified.firstGap.shortfallMinor, pc) : null,
+              deadlineBalances: deadlineBalances(modified),
             },
             deltaMinBalanceMinor: diff.deltaMinBalanceMinor,
             deltaMinBalance: (diff.deltaMinBalanceMinor < 0 ? "−" : "+") + formatMinor(Math.abs(diff.deltaMinBalanceMinor), pc),

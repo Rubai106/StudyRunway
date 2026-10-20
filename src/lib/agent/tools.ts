@@ -14,6 +14,8 @@ export interface ToolContext {
   sessionId: string;
   /** Agent task the tool call belongs to. */
   taskId: string;
+  /** Latest user-provided task context, scoped by the orchestrator and never model-supplied. */
+  userRequest?: string;
 }
 
 /** Result returned by every tool handler. */

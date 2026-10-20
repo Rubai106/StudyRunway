@@ -9,7 +9,7 @@ import { createXaiProvider, readXaiConfig, DEFAULT_XAI_MODEL } from "../xai";
 import { createOpenAiProvider, readOpenAiConfig } from "../openai";
 import { createGeminiProvider, readGeminiConfig, DEFAULT_GEMINI_BASE_URL, DEFAULT_GEMINI_MODEL } from "../gemini";
 import { createAnthropicProvider, readAnthropicConfig } from "../anthropic";
-import { createVertexProvider } from "../vertex";
+import { createVertexProvider, DEFAULT_VERTEX_AI_TIMEOUT_MS } from "../vertex";
 import { selectProvider } from "../index";
 import { postJson } from "../http";
 import { toJsonSchema } from "../zodjson";
@@ -30,8 +30,10 @@ const TOOLS: ToolSchema[] = [
 describe("Vertex adapter", () => {
   it("requests JSON mode for structured agent prompts", async () => {
     let gotBody: Record<string, unknown> = {};
-    const fakePost = vi.fn(async (_url: string, opts: { body: unknown }) => {
+    let gotTimeoutMs = 0;
+    const fakePost = vi.fn(async (_url: string, opts: { body: unknown; timeoutMs: number }) => {
       gotBody = opts.body as Record<string, unknown>;
+      gotTimeoutMs = opts.timeoutMs;
       return { choices: [{ message: { content: '{"ok":true}' }, finish_reason: "stop" }] };
     });
     const provider = createVertexProvider(
@@ -43,6 +45,9 @@ describe("Vertex adapter", () => {
     const result = await provider.chat(MESSAGES, [], { responseFormat: "json_object" });
 
     expect(gotBody.response_format).toEqual({ type: "json_object" });
+    expect(gotBody.reasoning_effort).toBe("low");
+    expect(gotBody.max_tokens).toBe(4096);
+    expect(gotTimeoutMs).toBe(DEFAULT_VERTEX_AI_TIMEOUT_MS);
     expect(result.text).toBe('{"ok":true}');
   });
 

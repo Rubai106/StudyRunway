@@ -122,7 +122,11 @@ async function sendMessage(page: Page, text: string) {
 
 async function openChat(page: Page) {
   await page.goto("/");
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  const chat = page.getByRole("button", { name: "Chat", exact: true });
+  if ((page.viewportSize()?.width ?? 1280) < 768) {
+    await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
+  }
+  await chat.click();
 }
 
 test.describe("interaction states", () => {
@@ -188,6 +192,7 @@ test.describe("interaction states", () => {
       timeout: 15000,
     });
     expect(mocks.chatRequestCount()).toBe(2);
+    await expect(page.getByText("ERROR-STREAM trigger please", { exact: true })).toHaveCount(1);
   });
 
   test("quick replies answer the correct question when several are pending", async ({

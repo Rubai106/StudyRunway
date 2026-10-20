@@ -176,6 +176,25 @@ function confirmedAnswersAsFinancialText(facts: TaskState["confirmedFacts"]): st
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
     const record = parsed as Record<string, unknown>;
+    if (fact.key === "transfer-details") {
+      const answer = record.answer && typeof record.answer === "object" && !Array.isArray(record.answer)
+        ? record.answer as Record<string, unknown>
+        : null;
+      const amount = typeof answer?.sendAmount === "number"
+        ? answer.sendAmount
+        : typeof answer?.sendAmount === "string"
+          ? Number(answer.sendAmount)
+          : NaN;
+      const sendCurrency = typeof answer?.sendCurrency === "string" ? answer.sendCurrency.trim().toUpperCase() : "";
+      const receiveCurrency = typeof answer?.receiveCurrency === "string" ? answer.receiveCurrency.trim().toUpperCase() : "";
+      const deadline = typeof answer?.deadline === "string" && ISO_DATE.safeParse(answer.deadline).success
+        ? answer.deadline
+        : "";
+      if (Number.isFinite(amount) && amount > 0 && isSupportedCurrency(sendCurrency) && isSupportedCurrency(receiveCurrency)) {
+        statements.push(`send ${amount} ${sendCurrency} to receive ${receiveCurrency}${deadline ? ` by ${deadline}` : ""}`);
+      }
+      continue;
+    }
     if (fact.key === "tuition-timing-details") {
       const formAmount = (key: string) => {
         const value = record[key];
@@ -320,6 +339,7 @@ export interface RunAgentOptions {
 }
 
 export const DEMO_LABEL = "Demo mode — no model provider configured";
+export const DETERMINISTIC_DEMO_LABEL = "Built-in deterministic demo — no AI model used";
 const DEFAULT_TOOL_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_TOOL_CALLS = 8;
 const MAX_MODEL_ROUNDS = 3;
@@ -336,7 +356,7 @@ function isSimpleGreeting(message: string): boolean {
 function isTuitionTimingRequest(message: string): boolean {
   const concernsTuition = /\b(?:tuition|tuition fee|education fee|invoice|payment deadline)\b/i.test(message);
   const asksWhetherPaymentCanBeMade = /\b(?:can|could|will|would|am i able to|do i have enough(?: money)? to|is there enough)\b[\s\S]{0,100}\b(?:pay|paid|cover|afford|meet|settle)\b/i.test(message);
-  const asksAboutTiming = /\b(?:on time|before (?:the )?(?:deadline|due date)|by (?:the )?(?:deadline|due date)|by \d{4}-\d{2}-\d{2}|before \d{4}-\d{2}-\d{2})\b/i.test(message);
+  const asksAboutTiming = /\b(?:on time|meet (?:the )?deadline|by (?:the )?(?:deadline|due date)|before (?:the )?(?:deadline|due date)|by \d{4}-\d{2}-\d{2}|before \d{4}-\d{2}-\d{2})\b/i.test(message);
   return concernsTuition && asksWhetherPaymentCanBeMade && asksAboutTiming;
 }
 
@@ -384,8 +404,35 @@ function explicitTransferComparisonArgs(text: string): Record<string, unknown> |
   const toCurrency = receiveMatch?.[1]?.toUpperCase();
   if (!toCurrency || !isSupportedCurrency(toCurrency)) return null;
 
-  const deadlineMatch = text.match(/\b(?:by|before|deadline(?: is)?|due(?: on)?)\s*(\d{4}-\d{2}-\d{2})\b/i);
-  if (deadlineMatch && !ISO_DATE.safeParse(deadlineMatch[1]).success) return null;
+  const monthNames = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+  ];
+  const monthPattern = monthNames.join("|");
+  const deadlineMatch = text.match(
+    new RegExp(
+      `\\b(?:by|before|deadline(?: is)?|due(?: on)?)\\s+(?:(\\d{4}-\\d{2}-\\d{2})|(${monthPattern})\\s+(\\d{1,2})(?:st|nd|rd|th)?[,]?\\s+(\\d{4})|(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthPattern})[,]?\\s+(\\d{4}))\\b`,
+      "i",
+    ),
+  );
+  let deadlineIso: string | null = null;
+  if (deadlineMatch) {
+    if (deadlineMatch[1]) {
+      if (!ISO_DATE.safeParse(deadlineMatch[1]).success) return null;
+      deadlineIso = deadlineMatch[1];
+    } else {
+      const monthName = (deadlineMatch[2] ?? deadlineMatch[6])?.toLowerCase();
+      const day = Number(deadlineMatch[3] ?? deadlineMatch[5]);
+      const year = Number(deadlineMatch[4] ?? deadlineMatch[7]);
+      const month = monthName ? monthNames.indexOf(monthName) : -1;
+      const date = new Date(Date.UTC(year, month, day));
+      if (
+        month < 0 || !Number.isInteger(day) || day < 1 || day > 31 ||
+        date.getUTCFullYear() !== year || date.getUTCMonth() !== month || date.getUTCDate() !== day
+      ) return null;
+      deadlineIso = date.toISOString().slice(0, 10);
+    }
+  }
   const lower = text.toLowerCase();
   const objective = /\b(?:fastest|quickest|as soon as possible)\b/.test(lower)
     ? "fastest"
@@ -398,9 +445,122 @@ function explicitTransferComparisonArgs(text: string): Record<string, unknown> |
     amountMinor: toMinor(amount, fromCurrency),
     fromCurrency,
     toCurrency,
-    deadlineIso: deadlineMatch?.[1] ?? null,
+    deadlineIso,
     objective,
   };
+}
+
+function confirmedTransferComparisonArgs(
+  facts: TaskState["confirmedFacts"],
+  requestText: string,
+): Record<string, unknown> | null {
+  const fact = [...facts].reverse().find((item) => item.source === "user" && item.key === "transfer-details");
+  if (!fact) return null;
+  try {
+    const outer = JSON.parse(fact.value) as Record<string, unknown>;
+    const answer = outer["answer"] && typeof outer["answer"] === "object" && !Array.isArray(outer["answer"])
+      ? outer["answer"] as Record<string, unknown>
+      : null;
+    if (!answer) return null;
+    const amount = typeof answer["sendAmount"] === "number"
+      ? answer["sendAmount"]
+      : typeof answer["sendAmount"] === "string"
+        ? Number(answer["sendAmount"])
+        : NaN;
+    const fromCurrency = typeof answer["sendCurrency"] === "string" ? answer["sendCurrency"].trim().toUpperCase() : "";
+    const toCurrency = typeof answer["receiveCurrency"] === "string" ? answer["receiveCurrency"].trim().toUpperCase() : "";
+    const rawDeadline = typeof answer["deadline"] === "string" ? answer["deadline"].trim() : "";
+    const deadlineIso = rawDeadline && ISO_DATE.safeParse(rawDeadline).success ? rawDeadline : null;
+    if (!Number.isFinite(amount) || amount <= 0 || !isSupportedCurrency(fromCurrency) || !isSupportedCurrency(toCurrency)) {
+      return null;
+    }
+    const lower = requestText.toLowerCase();
+    const objective = /\b(?:fastest|quickest|as soon as possible)\b/.test(lower)
+      ? "fastest"
+      : /\b(?:cheapest|lowest (?:total )?cost|minimi[sz]e (?:the )?(?:fee|cost)s?)\b/.test(lower)
+        ? "min_total_cost"
+        : "balanced";
+    return { amountMinor: toMinor(amount, fromCurrency), fromCurrency, toCurrency, deadlineIso, objective };
+  } catch {
+    return null;
+  }
+}
+
+function isTransferComparisonIntent(text: string): boolean {
+  const mentionsTransfer = /\b(?:transfer|transferring|send(?:ing)?|remit(?:tance)?)\b/i.test(text);
+  const asksToCompare = /\b(?:compare|comparison|options|best|better|rank|optimi[sz]e|provider|quote|rates?|fees?|amount received|delivery time)\b/i.test(text);
+  return mentionsTransfer && asksToCompare;
+}
+
+function transferDetailsQuestion(): ClarifyQuestion {
+  const currencyCodes = CURRENCIES.map(({ code }) => code);
+  return {
+    id: "transfer-details",
+    kind: "form",
+    prompt: "I need the exact amount and currencies used by the transfer before I can compare it. A recipient-currency target is not the same as the amount you send.",
+    fields: [
+      {
+        name: "sendAmount",
+        label: "Amount you will send",
+        type: "number",
+        required: true,
+      },
+      {
+        name: "sendCurrency",
+        label: "Sending currency",
+        type: "select",
+        options: currencyCodes,
+        required: true,
+      },
+      {
+        name: "receiveCurrency",
+        label: "Currency the recipient should receive",
+        type: "select",
+        options: currencyCodes,
+        required: true,
+      },
+      {
+        name: "deadline",
+        label: "Payment deadline (optional)",
+        type: "date",
+        required: false,
+      },
+    ],
+  };
+}
+
+/** Give a cautious baseline answer for clear rental-scam questions without waiting on the model. */
+function deterministicRentalRiskAnswer(text: string): string | null {
+  const asksForRiskReview = /\b(?:scam|fraud|warning signs?|suspicious|legitimate|safe to pay|should i pay)\b/i.test(text);
+  const concernsHousing = /\b(?:rent|rental|landlord|deposit|tenancy|lease|apartment|flat|housing)\b/i.test(text);
+  if (!asksForRiskReview || !concernsHousing) return null;
+
+  const beforeViewing =
+    /\b(?:before|prior to|without)\b[\s\S]{0,60}\b(?:view(?:ing)?|inspect(?:ing|ion)?|see(?:ing)?)\b/i.test(text) ||
+    /\bbefore\s+(?:i|we)\s+(?:arrive|view|inspect)\b/i.test(text);
+  const hardToReverse = /\b(?:bank|wire|cash|crypto(?:currency)?|gift cards?|money transfer)\b/i.test(text);
+  const alreadyPaid = /\b(?:already paid|already sent|have paid|have sent|transferred the money|sent the money)\b/i.test(text);
+
+  if (alreadyPaid) {
+    return [
+      "I can’t verify whether this is a scam from the details provided. Because you say the money was already sent, contact your bank or payment provider’s fraud team immediately and ask whether the transfer can be stopped or recalled; recovery is not guaranteed.",
+      "Preserve the listing, agreement, messages, payment receipt, account details, and timestamps. Report it through the official police, consumer-protection, or tenant-authority channel for the destination country. Don’t send additional money while the recipient remains unverified.",
+      "If you share the destination country, I can check official reporting and tenancy guidance.",
+    ].join("\n\n");
+  }
+
+  if (beforeViewing && hardToReverse) {
+    return [
+      "This is a high-risk request, but these details alone do not prove it is a scam. Paying before you or someone you trust has viewed the property, especially by bank transfer or another hard-to-reverse method, leaves you with little protection if the listing is false.",
+      "Do not send the deposit yet. Independently verify the landlord or agency using contact details from its official website or register; arrange an in-person viewing or a live video viewing with someone you trust; get a signed agreement that identifies the property, landlord, amount, and refund terms; and confirm the payment account belongs to that verified landlord or agency. Ask your university housing office to review the offer.",
+      "Check deposit rules with the destination’s official tenant authority before paying. I have not verified the listing, landlord, legal deposit limit, or recipient, so I can’t label it safe or confirm it is a scam. If you provide the destination country, I can check its official rules.",
+    ].join("\n\n");
+  }
+
+  return [
+    "I can’t verify a landlord, listing, or payment recipient from a description. Before paying, independently confirm the property and landlord through official contact details, review a signed agreement, ensure the account name matches the verified landlord or agency, and use a payment method with a clear dispute route.",
+    "Treat urgency, refusal to show the property, inconsistent account names, or pressure to use cash, crypto, gift cards, or an irreversible transfer as reasons to pause. For legal deposit limits or reporting routes, share the destination country so I can check official guidance.",
+  ].join("\n\n");
 }
 
 function explicitLivingCostInputs(text: string): Record<string, unknown> | null {
@@ -516,11 +676,14 @@ function explicitDelayScenario(text: string, plan: NonNullable<TaskState["workin
 }
 
 function explicitIncomeShockScenario(text: string, plan: NonNullable<TaskState["workingPlan"]>): Record<string, unknown> | null {
-  const delayMatch = text.match(/\bdelay the work paycheck by\s+(\d{1,3})\s+days?\b/i);
-  const reductionMatch = text.match(/\breduce the work paycheck amount by\s+(\d{1,3}(?:\.\d+)?)\s*%/i);
-  if (!delayMatch || !reductionMatch) return null;
-  const delayDays = Number(delayMatch[1]);
-  const reductionPercent = Number(reductionMatch[1]);
+  const incomeTerm = /\b(?:work\s+)?(?:paycheck|pay\s+cheque|wages?|work\s+income|payday|salary)\b/i.exec(text);
+  if (incomeTerm?.index === undefined) return null;
+  const incomeContext = text.slice(Math.max(0, incomeTerm.index - 120), incomeTerm.index + incomeTerm[0].length + 220);
+  const delayMatch = incomeContext.match(/\b(?:delay(?:ed)?|late|postponed)\b[\s\S]{0,90}?\b(\d{1,3})\s+days?\b/i);
+  const reductionMatch = incomeContext.match(/\breduc(?:e|ed|tion)\b[\s\S]{0,50}?\b(\d{1,3}(?:\.\d+)?)\s*%|\b(\d{1,3}(?:\.\d+)?)\s*%\s*(?:lower|less|reduction)\b/i);
+  if (!delayMatch && !reductionMatch) return null;
+  const delayDays = delayMatch ? Number(delayMatch[1]) : 0;
+  const reductionPercent = Number(reductionMatch?.[1] ?? reductionMatch?.[2] ?? 0);
   if (!Number.isInteger(delayDays) || delayDays < 0 || delayDays > 365 || reductionPercent < 0 || reductionPercent > 100) return null;
   const incomes = plan.fundingSources.filter((source) =>
     source.kind === "income"
@@ -670,7 +833,7 @@ function explicitPolicyResearchArgs(text: string): Record<string, unknown> | nul
       ? "instalments"
       : /\bscholarship\b/.test(lower)
         ? "scholarship"
-        : /\bproof of funds?\b/.test(lower)
+        : /\bproof[- ]of[- ]funds?\b/.test(lower)
           ? "proof_of_funds"
           : /\bvisa\b/.test(lower)
             ? "visa"
@@ -685,14 +848,56 @@ function explicitPolicyResearchArgs(text: string): Record<string, unknown> | nul
     "UK", "US",
   ];
   const escapedCountries = countryNames.map((country) => country.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const country = text.match(new RegExp(`\\b(?:in|country(?: is)?|destination(?: country)?)\\s+(?:the\\s+)?(${escapedCountries})\\b`, "i"))?.[1];
-  if (topic === "credit_building" && !country) return null;
-  const request = text.slice(0, 350).replace(/\s+/g, " ").trim();
+  // Parse a labelled line separately so punctuation/whitespace from pasted
+  // requests cannot make a supplied destination disappear before live lookup.
+  const labelledCountry = text.split(/\r?\n/)
+    .map((line) => /^\s*(?:Country|Destination country)\s*:\s*(.*?)\s*$/i.exec(line)?.[1]?.trim())
+    .find((value) => Boolean(value));
+  const inlineLabelCountry = text.match(
+    new RegExp(`\\b(?:Country|Destination country)\\s*:\\s*(${escapedCountries})\\b`, "i"),
+  )?.[1];
+  const countryFromLabel = inlineLabelCountry ?? (labelledCountry
+    ? countryNames.find((name) => name.toLowerCase() === labelledCountry.replace(/[.,;]+$/, "").trim().toLowerCase())
+    : undefined);
+  const countryAliases: { country: string; aliases: string[] }[] = [
+    { country: "United States", aliases: ["American", "U.S.", "USA"] },
+    { country: "United Kingdom", aliases: ["British"] },
+    { country: "United Arab Emirates", aliases: ["Emirati"] },
+    { country: "New Zealand", aliases: ["New Zealander"] },
+    { country: "South Africa", aliases: ["South African"] },
+    { country: "Bangladesh", aliases: ["Bangladeshi"] },
+    { country: "Australia", aliases: ["Australian"] },
+    { country: "Canada", aliases: ["Canadian"] },
+    { country: "Denmark", aliases: ["Danish"] },
+    { country: "Germany", aliases: ["German"] },
+    { country: "Ireland", aliases: ["Irish"] },
+    { country: "India", aliases: ["Indian"] },
+    { country: "Malaysia", aliases: ["Malaysian"] },
+    { country: "Singapore", aliases: ["Singaporean"] },
+  ];
+  const countryFromDemonym = countryAliases.find(({ aliases }) =>
+    aliases.some((alias) => new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text)),
+  )?.country;
+  const country = countryFromLabel
+    ?? text.match(new RegExp(`^\\s*(?:Country|Destination country)\\s*:\\s*(${escapedCountries})\\b`, "im"))?.[1]
+    ?? text.match(new RegExp(`\\b(?:in|country(?: is)?|destination(?: country)?)\\s+(?:the\\s+)?(${escapedCountries})\\b`, "i"))?.[1]
+    ?? countryFromDemonym;
+  const institution = text.match(/^\s*Institution\s*:\s*([^\r\n]{1,160})\s*$/im)?.[1]?.trim();
+  const officialDomain = text.match(/^\s*Official domain\s*:\s*([a-z0-9.-]{1,253})\s*$/im)?.[1]?.trim();
   return {
-    query: `Official ${topic.replaceAll("_", " ")} guidance for international students${country ? ` in ${country}` : ""}: ${request}`.slice(0, 500),
+    // Keep personal amounts, scholarship details, and other unrelated context
+    // out of the search request. The tool already receives the scoped topic,
+    // destination and (when explicitly labelled) institution.
+    query: `Official ${topic.replaceAll("_", " ")} guidance for international students${country ? ` in ${country}` : ""}${institution ? ` at ${institution}` : ""}`.slice(0, 500),
     topic,
     country: country ?? "",
+    ...(institution ? { institution } : {}),
+    ...(officialDomain ? { officialDomain } : {}),
   };
+}
+
+function isExplicitPolicyResearchRequest(text: string): boolean {
+  return /\b(?:official|research|cite|sources?|current|policy|requirements?|rules?|guidance)\b/i.test(text);
 }
 
 function tuitionTimingFallbackQuestion(context = ""): ClarifyQuestion {
@@ -1156,9 +1361,10 @@ async function* runDemoFlow(
   state: TaskState,
   message: string,
   opts: Required<Pick<RunAgentOptions, "toolTimeoutMs" | "maxToolCalls">> &
-    Pick<RunAgentOptions, "signal"> & { tools: ToolDefinition[] }
+    Pick<RunAgentOptions, "signal"> & { tools: ToolDefinition[]; demoLabel?: string }
 ): AsyncGenerator<AgentEvent> {
-  const demo = (text: string): string => `${DEMO_LABEL}: ${text}`;
+  const demoLabel = opts.demoLabel ?? DEMO_LABEL;
+  const demo = (text: string): string => `${demoLabel}: ${text}`;
   const sessionId = state.sessionId;
   yield { type: "status", phase: "understanding" };
   checkAbort(opts.signal);
@@ -1266,8 +1472,8 @@ async function* runDemoFlow(
     type: "assistant_text",
     text:
       demoMode === "safe_to_send"
-        ? `${DEMO_LABEL}. I’m loading a deterministic Safe-to-Send tuition scenario. You can review the decision status, risks, missing information, and sandbox simulation state below.`
-        : `${DEMO_LABEL}. I’m preparing a sample living-cost plan for Limerick using the included sourced estimates. You can review the categories, change your budget assumptions and compare the result below.`,
+        ? `${demoLabel}. I’m loading a deterministic Safe-to-Send tuition scenario. You can review the decision status, risks, missing information, and sandbox simulation state below.`
+        : `${demoLabel}. I’m preparing a sample living-cost plan for Limerick using the included sourced estimates. You can review the categories, change your budget assumptions and compare the result below.`,
   };
 
   yield { type: "status", phase: "calling_tools" };
@@ -1401,8 +1607,8 @@ async function* runDemoFlow(
   yield {
     type: "assistant_text",
     text: verified
-      ? `${DEMO_LABEL}. The sample calculation checked out when repeated with the same inputs. No AI model was used.`
-      : `${DEMO_LABEL}. The repeated sample calculation did not match. Treat the result as provisional and review the assumptions before relying on it.`,
+      ? `${demoLabel}. The sample calculation checked out when repeated with the same inputs.`
+      : `${demoLabel}. The repeated sample calculation did not match. Treat the result as provisional and review the assumptions before relying on it.`,
   };
 
   // ---- Outcome: the REAL interactive component -------------------------------
@@ -1415,7 +1621,7 @@ async function* runDemoFlow(
     data: {
       ...(exec.result.data ?? {}),
       demoMode: true,
-      note: DEMO_LABEL,
+      note: demoLabel,
       verified,
       summary: demo(
         demoMode === "safe_to_send"
@@ -1451,16 +1657,25 @@ async function* runModelFlow(
   if (!provider) throw new Error("runModelFlow requires a provider");
   const sessionId = state.sessionId;
   const documentOnlyMode = isAttachedDocumentEvidence(message);
+  const requestTextForToolRouting = explicitFinancialRequestText(state, message);
+  const explicitTransferArgs =
+    confirmedTransferComparisonArgs(state.confirmedFacts, requestTextForToolRouting) ??
+    explicitTransferComparisonArgs(requestTextForToolRouting);
   // An attachment turn can produce an extraction/review card only. Numerical
   // tools become available after the user confirms candidate facts in a later
   // turn, which keeps heuristic document values out of calculations.
   const availableModelTools = documentOnlyMode
     ? modelTools.filter((tool) => tool.name === "extract_document")
     : modelTools.filter((tool) =>
-        tool.name !== "draft_email" || explicitEmailDraftRequested(explicitFinancialRequestText(state, message)),
+        (tool.name !== "draft_email" || explicitEmailDraftRequested(requestTextForToolRouting)) &&
+        (tool.name !== "compare_transfers" || Boolean(explicitTransferArgs)),
       );
   let directFinancialAnswer = "";
-  const ctx: ToolContext = { sessionId, taskId: state.taskId };
+  const ctx: ToolContext = {
+    sessionId,
+    taskId: state.taskId,
+    userRequest: explicitFinancialRequestText(state, message),
+  };
   const toolSchemas = toToolSchemas(availableModelTools);
   let toolCallCount = 0;
   const toolResults: { tool: string; result: ToolResult }[] = [...(opts.priorToolResults ?? [])];
@@ -1533,7 +1748,9 @@ async function* runModelFlow(
           ...(priorGap ? { gapSummary: priorGap.result.summary } : {}),
         };
       } else if (tool.name === "compare_transfers") {
-        const groundedArgs = explicitTransferComparisonArgs(explicitFinancialRequestText(state, message));
+        const transferText = explicitFinancialRequestText(state, message);
+        const groundedArgs = confirmedTransferComparisonArgs(state.confirmedFacts, transferText)
+          ?? explicitTransferComparisonArgs(transferText);
         if (groundedArgs) effectiveArgs = groundedArgs;
       } else if (tool.name === "build_living_cost_plan") {
         const groundedArgs = explicitLivingCostInputs(explicitFinancialRequestText(state, message));
@@ -1685,6 +1902,472 @@ async function* runModelFlow(
         summary: outcome.summary,
         verified: false,
         evidence: state.evidence,
+        toolCalls: state.toolCalls.map((call) => ({ tool: call.tool, ok: call.ok, summary: call.summary })),
+      },
+    };
+    return;
+  }
+
+  // A fully specified delayed-pay scenario is already a deterministic task:
+  // avoid a slow model classification/tool-planning round trip, ground every
+  // input in the user's text or saved plan, and return the engine's comparison.
+  const incomeShockRequestText = explicitFinancialRequestText(state, message);
+  const incomeShockIntent =
+    /\b(?:simulate|model|calculate|stress[\s-]*test|what[\s-]*if|show)\b/i.test(incomeShockRequestText) &&
+    /\b(?:paycheck|pay\s+cheque|wages?|work\s+income|payday|salary)\b/i.test(incomeShockRequestText) &&
+    /\b(?:delay(?:ed)?|late|postponed|reduc(?:e|ed|tion)|lower)\b/i.test(incomeShockRequestText);
+  const parsedIncomeShockPlan = extractScenarioFundingGapInputFromText(incomeShockRequestText);
+  const incomeShockPlan = state.workingPlan ?? (parsedIncomeShockPlan ? fundingGapInputToToolPlan(parsedIncomeShockPlan) : null);
+  const incomeShock = incomeShockPlan
+    ? explicitIncomeShockScenario(incomeShockRequestText, incomeShockPlan)
+    : null;
+  const fundingTool = findTool(availableModelTools, "analyze_funding_gap");
+  const scenarioTool = findTool(availableModelTools, "simulate_scenario");
+  if (incomeShockIntent && incomeShockPlan && incomeShock && fundingTool && scenarioTool) {
+    yield { type: "status", phase: "understanding" };
+    yield { type: "status", phase: "planning" };
+    state = updateTask(sessionId, {
+      status: "executing",
+      userGoal: "Simulate delayed or reduced student work income against upcoming bills",
+    });
+    yield { type: "status", phase: "calling_tools" };
+
+    const baselineEvents: AgentEvent[] = [];
+    const baseline = await runSingleTool(
+      fundingTool,
+      fundingGapInputFromPlan(incomeShockPlan),
+      "Calculate the stated baseline funding plan",
+      rid("income-base"),
+      (event) => baselineEvents.push(event),
+    );
+    for (const event of baselineEvents) yield event;
+    if (!baseline.ok) {
+      state = updateTask(sessionId, { status: "failed" });
+      yield { type: "error", message: baseline.summary, recoverable: true };
+      return;
+    }
+
+    const scenarioArgs = {
+      plan: incomeShockPlan,
+      scenario: incomeShock,
+      recoveryOptions: explicitScenarioRecoveryOptions(incomeShockRequestText, incomeShockPlan) ?? [],
+    };
+    const scenarioEvents: AgentEvent[] = [];
+    const scenarioResult = await runSingleTool(
+      scenarioTool,
+      scenarioArgs,
+      "Simulate delayed or reduced paycheck against the baseline",
+      rid("income-scenario"),
+      (event) => scenarioEvents.push(event),
+    );
+    for (const event of scenarioEvents) yield event;
+    if (!scenarioResult.ok) {
+      state = updateTask(sessionId, { status: "failed" });
+      yield { type: "error", message: scenarioResult.summary, recoverable: true };
+      return;
+    }
+
+    // Replay this pure calculation once and compare its deterministic result.
+    yield { type: "status", phase: "verifying" };
+    const successfulScenarioCall = [...state.toolCalls].reverse().find((call) => call.ok && call.tool === scenarioTool.name);
+    let verified = false;
+    let verifyNote = "The delayed-pay calculation could not be independently re-run.";
+    if (successfulScenarioCall) {
+      const verifyId = rid("income-verify");
+      yield {
+        type: "tool_call_start",
+        id: verifyId,
+        tool: scenarioTool.name,
+        label: "Verification re-run",
+      };
+      try {
+        const replay = await executeToolCall(
+          scenarioTool,
+          successfulScenarioCall.args ?? scenarioArgs,
+          ctx,
+          opts.toolTimeoutMs,
+        );
+        verified = toolResultsMatchForVerification(
+          scenarioTool.name,
+          { ok: successfulScenarioCall.ok, summary: successfulScenarioCall.summary },
+          replay.result,
+        );
+        verifyNote = verified
+          ? "The deterministic delayed-pay calculation matched when independently re-run."
+          : "The delayed-pay calculation differed when re-run; treat the figures as provisional.";
+        state = recordToolCall(sessionId, {
+          id: verifyId,
+          tool: scenarioTool.name,
+          argsSummary: `verification re-run of ${successfulScenarioCall.id}`,
+          args: successfulScenarioCall.args ?? {},
+          ok: verified,
+          summary: verifyNote,
+        });
+        yield { type: "tool_call_end", id: verifyId, tool: scenarioTool.name, ok: verified, summary: verifyNote, durationMs: replay.durationMs };
+      } catch (err) {
+        verifyNote = `Verification re-run failed: ${err instanceof Error ? err.message : "unknown error"}. Treat the figures as provisional.`;
+        yield { type: "tool_call_end", id: verifyId, tool: scenarioTool.name, ok: false, summary: verifyNote, durationMs: 0 };
+      }
+    }
+
+    const summary = [
+      `Baseline funding check: ${baseline.summary}`,
+      `Delayed-pay case: ${scenarioResult.summary}`,
+      "No loan, scholarship, or other backup funding was assumed. Verify the revised payday with the employer and ask the university finance office directly about any available payment options before the deadline.",
+      "Timing caveat: when a paycheck and bill share a date, the forecast counts that day's income before the bill. Confirm actual payroll clearance and the university's payment cut-off before relying on same-day funds.",
+      verifyNote,
+    ].join("\n\n");
+    const latestScenario = [...toolResults].reverse().find((item) => item.tool === scenarioTool.name && item.result.ok)?.result;
+    state = updateTask(sessionId, { status: "done" });
+    yield { type: "assistant_text", text: summary };
+    yield { type: "status", phase: "done" };
+    yield {
+      type: "result",
+      component: "scenario_comparison",
+      data: {
+        ...(latestScenario?.data ?? {}),
+        baselineFundingCheck: baseline.data,
+        summary,
+        verified,
+        verifyNote,
+        evidence: state.evidence,
+        toolCalls: state.toolCalls.map((call) => ({ tool: call.tool, ok: call.ok, summary: call.summary })),
+      },
+    };
+    return;
+  }
+
+  // Source-first policy lookup is a deterministic workflow. When the user
+  // explicitly requests official/current guidance and names a student-finance
+  // policy topic, route straight to the grounded research tool instead of
+  // making a broad model-classification call first. That call can be slow and
+  // adds no policy evidence; this keeps official research responsive while
+  // the tool itself still enforces source and claim-level citation checks.
+  const policyRequestText = explicitFinancialRequestText(state, message);
+  const policyArgs = explicitPolicyResearchArgs(policyRequestText);
+  const policyResearchTool = findTool(availableModelTools, "research_policy");
+  if (policyResearchTool && policyArgs?.["country"] && isExplicitPolicyResearchRequest(policyRequestText)) {
+    yield { type: "status", phase: "understanding" };
+    yield { type: "status", phase: "planning" };
+    state = updateTask(sessionId, { status: "executing", userGoal: "Retrieve official student-finance guidance" });
+    yield { type: "status", phase: "calling_tools" };
+    const callEvents: AgentEvent[] = [];
+    const outcome = await runSingleTool(
+      policyResearchTool,
+      policyArgs,
+      "Search official sources and verify cited policy claims",
+      rid("tc"),
+      (event) => callEvents.push(event),
+    );
+    for (const event of callEvents) yield event;
+    if (!outcome.ok) {
+      state = updateTask(sessionId, { status: "failed" });
+      yield { type: "error", message: outcome.summary, recoverable: true };
+      return;
+    }
+    const result: ToolResult = { ok: true, summary: outcome.summary, data: outcome.data ?? {} };
+    state = updateTask(sessionId, { status: "done" });
+    yield { type: "assistant_text", text: outcome.summary };
+    yield { type: "status", phase: "done" };
+    yield {
+      type: "result",
+      component: "policy_research",
+      data: {
+        ...(outcome.data ?? {}),
+        summary: outcome.summary,
+        verified: hasVerifiedPolicyAnswer(result),
+        evidence: state.evidence,
+        toolCalls: state.toolCalls.map((call) => ({ tool: call.tool, ok: call.ok, summary: call.summary })),
+      },
+    };
+    return;
+  }
+
+  // A complete, explicit tuition deadline check is deterministic. Run the
+  // validated funding and action-plan tools directly so a slow or unavailable
+  // model cannot prevent the student from receiving the calculation. Keep
+  // research, email, transfer, document, and resumed workflows on their own
+  // routes.
+  const directTuitionInput = !opts.skipUnderstanding && !state.workingPlan && !documentOnlyMode &&
+    isTuitionTimingRequest(policyRequestText) &&
+    !isExplicitPolicyResearchRequest(policyRequestText) &&
+    !explicitEmailDraftRequested(policyRequestText) &&
+    !explicitTransferArgs
+    ? extractFundingGapInputFromText(policyRequestText)
+    : null;
+
+  const directRentalAnswer =
+    !opts.skipUnderstanding && !state.workingPlan && !documentOnlyMode &&
+    !isExplicitPolicyResearchRequest(requestTextForToolRouting) &&
+    !explicitEmailDraftRequested(requestTextForToolRouting)
+      ? deterministicRentalRiskAnswer(requestTextForToolRouting)
+      : null;
+  if (directRentalAnswer) {
+    state = updateTask(sessionId, {
+      status: "done",
+      pendingQuestions: [],
+      missingInfo: [],
+      userGoal: "Review rental-payment warning signs and safe verification steps.",
+      assumptions: [],
+    });
+    yield { type: "assistant_text", text: directRentalAnswer };
+    yield { type: "status", phase: "done" };
+    return;
+  }
+
+  // A fully specified corridor comparison is deterministic against the
+  // reference dataset. Avoid waiting on model classification/planning just to
+  // return the honest no-live-quote result (or the labelled reference rows).
+  // Composite requests still use the model flow so other requested work is
+  // not silently dropped.
+  const hasTransferDetailsAnswer = state.confirmedFacts.some((fact) => fact.source === "user" && fact.key === "transfer-details");
+  const canRouteTransferDirectly =
+    !state.workingPlan && !documentOnlyMode &&
+    (!opts.skipUnderstanding || hasTransferDetailsAnswer);
+  const isStandaloneTransferIntent =
+    canRouteTransferDirectly &&
+    isTransferComparisonIntent(requestTextForToolRouting) &&
+    !/\band\s+(?:also\s+)?(?:check|calculate|simulate|plan|forecast|draft|research|verify)\b/i.test(requestTextForToolRouting) &&
+    !isTuitionTimingRequest(requestTextForToolRouting) &&
+    !isExplicitPolicyResearchRequest(requestTextForToolRouting) &&
+    !explicitEmailDraftRequested(requestTextForToolRouting);
+  if (isStandaloneTransferIntent && !explicitTransferArgs) {
+    const question = transferDetailsQuestion();
+    state = updateTask(sessionId, {
+      status: "clarifying",
+      pendingQuestions: [question],
+      missingInfo: ["Exact send amount and currency", "Recipient currency"],
+      userGoal: "Compare education-related transfer options using the requested amount and currency pair.",
+    });
+    yield {
+      type: "assistant_text",
+      text: "Before comparing options, please confirm the amount and currencies the transfer itself will use. A target amount in the recipient currency does not determine the amount sent or the current exchange rate.",
+    };
+    yield { type: "status", phase: "clarifying" };
+    yield { type: "clarify", questions: [question] };
+    return;
+  }
+  const isStandaloneTransferComparison = isStandaloneTransferIntent && Boolean(explicitTransferArgs);
+  const directTransferTool = isStandaloneTransferComparison
+    ? findTool(availableModelTools, "compare_transfers")
+    : undefined;
+  if (explicitTransferArgs && directTransferTool) {
+    state = updateTask(sessionId, {
+      status: "planning",
+      pendingQuestions: [],
+      missingInfo: [],
+      userGoal: "Compare education-related transfer options by cost, delivery, and deadline using available quote evidence.",
+      assumptions: [],
+    });
+    yield { type: "status", phase: "planning" };
+    state = updateTask(sessionId, { status: "executing" });
+    yield { type: "status", phase: "calling_tools" };
+    const transferEvents: AgentEvent[] = [];
+    const transferOutcome = await runSingleTool(
+      directTransferTool,
+      explicitTransferArgs,
+      "Compare available transfer reference data",
+      rid("tc"),
+      (event) => transferEvents.push(event),
+    );
+    for (const event of transferEvents) yield event;
+    if (!transferOutcome.ok || !transferOutcome.data) {
+      state = updateTask(sessionId, { status: "failed" });
+      yield {
+        type: "error",
+        message: "I couldn't safely compare the transfer details provided. Please check the amount and currency pair.",
+        recoverable: true,
+      };
+      return;
+    }
+
+    state = updateTask(sessionId, { status: "verifying" });
+    yield { type: "status", phase: "verifying" };
+    let verified = false;
+    let verifyNote = "The reference comparison could not be independently repeated.";
+    if (directTransferTool.safeToReplayForVerification && !directTransferTool.requiresApproval) {
+      const verifyId = rid("verify");
+      yield { type: "tool_call_start", id: verifyId, tool: directTransferTool.name, label: "Verification re-run" };
+      try {
+        const replay = await executeToolCall(directTransferTool, explicitTransferArgs, ctx, opts.toolTimeoutMs);
+        verified = toolResultsMatchForVerification(
+          directTransferTool.name,
+          { ok: transferOutcome.ok, summary: transferOutcome.summary, data: transferOutcome.data },
+          replay.result,
+        );
+        verifyNote = verified
+          ? "Repeated the reference-data comparison and the result matched."
+          : "The repeated comparison did not match; treat the result as provisional.";
+        state = recordToolCall(sessionId, {
+          id: verifyId,
+          tool: directTransferTool.name,
+          argsSummary: "verification re-run of the transfer comparison",
+          ok: verified,
+          summary: verifyNote,
+        });
+        yield { type: "tool_call_end", id: verifyId, tool: directTransferTool.name, ok: verified, summary: verifyNote, durationMs: replay.durationMs };
+      } catch {
+        verifyNote = "The verification re-run failed; treat the comparison as provisional.";
+        yield { type: "tool_call_end", id: verifyId, tool: directTransferTool.name, ok: false, summary: verifyNote, durationMs: 0 };
+      }
+    }
+
+    const liveQuoteNote =
+      "This chat comparison uses built-in reference/sample data, not a live provider quote. It does not establish today's FX margin, recipient-bank charges, delivery time, or whether the transfer will meet your tuition deadline. Check a current provider quote and receiving-bank charges before deciding.";
+    const summary = `${transferOutcome.summary}\n\n${liveQuoteNote}\n${verifyNote}`;
+    state = updateTask(sessionId, { status: "done" });
+    yield { type: "assistant_text", text: summary };
+    yield { type: "status", phase: "done" };
+    yield {
+      type: "result",
+      component: "transfer_comparison",
+      data: {
+        ...transferOutcome.data,
+        summary,
+        verified,
+        verifyNote,
+        evidence: state.evidence,
+        toolCalls: state.toolCalls.map((call) => ({ tool: call.tool, ok: call.ok, summary: call.summary })),
+      },
+    };
+    return;
+  }
+
+  const directFundingTool = directTuitionInput
+    ? findTool(availableModelTools, "analyze_funding_gap")
+    : undefined;
+  if (directTuitionInput && directFundingTool) {
+    state = updateTask(sessionId, {
+      status: "planning",
+      pendingQuestions: [],
+      missingInfo: [],
+      userGoal: "Check whether the listed tuition can be covered by available and expected funds by the due date.",
+      assumptions: [],
+    });
+    yield { type: "status", phase: "planning" };
+    yield {
+      type: "assistant_text",
+      text: "I have enough dated figures to check the tuition deadline against your stated funds. I’ll keep the protected living-cost reserve out of tuition funds.",
+    };
+    state = updateTask(sessionId, { status: "executing" });
+    yield { type: "status", phase: "calling_tools" };
+    const gapCallEvents: AgentEvent[] = [];
+    const gapOutcome = await runSingleTool(
+      directFundingTool,
+      directTuitionInput,
+      "Calculate funding available by the tuition deadline",
+      rid("tc"),
+      (event) => gapCallEvents.push(event),
+    );
+    for (const event of gapCallEvents) yield event;
+    if (!gapOutcome.ok || !gapOutcome.data) {
+      state = updateTask(sessionId, { status: "failed" });
+      yield {
+        type: "error",
+        message: "I couldn't safely calculate the tuition gap from the stated figures. Please check the amounts and dates.",
+        recoverable: true,
+      };
+      return;
+    }
+
+    state = updateTask(sessionId, { status: "verifying" });
+    yield { type: "status", phase: "verifying" };
+    let verified = false;
+    let verifyNote = "The deterministic calculation could not be independently repeated.";
+    if (directFundingTool.safeToReplayForVerification && !directFundingTool.requiresApproval) {
+      const verifyId = rid("verify");
+      yield { type: "tool_call_start", id: verifyId, tool: directFundingTool.name, label: "Verification re-run" };
+      try {
+        const replay = await executeToolCall(directFundingTool, directTuitionInput, ctx, opts.toolTimeoutMs);
+        verified = toolResultsMatchForVerification(
+          directFundingTool.name,
+          { ok: gapOutcome.ok, summary: gapOutcome.summary, data: gapOutcome.data },
+          replay.result,
+        );
+        verifyNote = verified
+          ? "Repeated the deterministic calculation and the result matched."
+          : "The repeated calculation did not match; treat the figures as provisional.";
+        state = recordToolCall(sessionId, {
+          id: verifyId,
+          tool: directFundingTool.name,
+          argsSummary: "verification re-run of the tuition funding check",
+          ok: verified,
+          summary: verifyNote,
+        });
+        yield { type: "tool_call_end", id: verifyId, tool: directFundingTool.name, ok: verified, summary: verifyNote, durationMs: replay.durationMs };
+      } catch {
+        verified = false;
+        verifyNote = "The verification re-run failed; treat the figures as provisional.";
+        yield { type: "tool_call_end", id: verifyId, tool: directFundingTool.name, ok: false, summary: verifyNote, durationMs: 0 };
+      }
+    }
+
+    let actionPlanData: Record<string, unknown> | undefined;
+    const actionPlanTool = findTool(availableModelTools, "build_action_plan");
+    if (actionPlanTool) {
+      const actionEvents: AgentEvent[] = [];
+      const actionOutcome = await runSingleTool(
+        actionPlanTool,
+        {},
+        "Build prioritized next steps from the same confirmed figures",
+        rid("tc"),
+        (event) => actionEvents.push(event),
+      );
+      for (const event of actionEvents) yield event;
+      if (actionOutcome.ok) actionPlanData = actionOutcome.data;
+    }
+
+    const hasGap = gapOutcome.data["hasGap"] === true;
+    const verdict = hasGap
+      ? "No—not from the listed funds by the tuition deadline. "
+      : gapOutcome.data["forecastComplete"] === true
+        ? "The listed plan shows no funding gap before the tuition deadline. "
+        : "I can’t confirm full coverage because some forecast items are incomplete. ";
+    const summaryParts = [`${verdict}${gapOutcome.summary}`, verifyNote];
+    if (hasGap) {
+      const tuitionDueDate = directTuitionInput.obligations.find((item) => item.kind === "tuition")?.dueDate;
+      const scholarshipArrivesLate = Boolean(tuitionDueDate && directTuitionInput.fundingSources.some((source) =>
+        source.kind === "scholarship" && source.expectedDate && source.expectedDate > tuitionDueDate,
+      ));
+      summaryParts.push("Urgent next steps:\n" + [
+        "1. Contact the university billing office promptly and ask whether an approved instalment plan or short extension is available; get any agreement in writing.",
+        scholarshipArrivesLate
+          ? "2. Confirm the scholarship release date with its awarding office and ask whether it can be expedited or sent directly to the university. It arrives after the tuition deadline in this forecast."
+          : "2. Confirm each expected funding date before relying on it.",
+        "3. Ask the university’s financial-aid or international-student office whether emergency support exists. These options are not guaranteed.",
+      ].join("\n"));
+    }
+    const actions = Array.isArray(actionPlanData?.["actions"])
+      ? actionPlanData["actions"] as Record<string, unknown>[]
+      : [];
+    if (actions.length > 0) {
+      summaryParts.push("Prioritized next steps:\n" + actions.slice(0, 3).map((action, index) => {
+        const title = typeof action["title"] === "string" ? action["title"] : "Review the next action";
+        const purpose = typeof action["purpose"] === "string" ? ` — ${action["purpose"]}` : "";
+        return `${index + 1}. ${title}${purpose}`;
+      }).join("\n"));
+    } else if (!actionPlanData) {
+      summaryParts.push("A prioritized action list could not be built, so confirm these steps directly with the university and funding office.");
+    }
+    const summary = summaryParts.join("\n\n");
+    state = updateTask(sessionId, {
+      status: "done",
+      planSteps: [{ id: "calculate-tuition-gap", title: "Calculate funds available by the tuition deadline", status: "done" }],
+      currentStepId: null,
+    });
+    yield { type: "assistant_text", text: summary };
+    yield { type: "status", phase: "done" };
+    yield {
+      type: "result",
+      component: "financial_outcome",
+      data: {
+        ...gapOutcome.data,
+        ...(actionPlanData ? { actionPlan: actionPlanData } : {}),
+        summary,
+        verified,
+        verifyNote,
+        evidence: state.evidence,
+        assumptions: [],
         toolCalls: state.toolCalls.map((call) => ({ tool: call.tool, ok: call.ok, summary: call.summary })),
       },
     };
@@ -2278,6 +2961,9 @@ async function* runModelFlow(
 
   // ---- OUTCOME -----------------------------------------------------------
   checkAbort(opts.signal);
+  // A malformed or failed model tool call must never decide which result card
+  // is rendered when another allowed tool completed successfully.
+  const component = pickComponent(state.toolCalls.filter((call) => call.ok).map((c) => c.tool));
   let closing = "";
   const latestPolicyResult = [...toolResults].reverse().find((item) => item.tool === "research_policy");
   const policyResearchFailed = policyResearchWasUnverified || Boolean(
@@ -2288,7 +2974,7 @@ async function* runModelFlow(
   const verifiedGapResult = [...state.toolCalls]
     .reverse()
     .find((call) => call.ok && call.tool === "analyze_funding_gap" && !call.summary.startsWith("Recomputed "));
-  if (verifiedGapResult) {
+  if (verifiedGapResult && component === "financial_outcome") {
     closing = verifiedGapResult.summary;
     const actionRows = actionPlanResult?.result.data?.["actions"];
     if (Array.isArray(actionRows)) {
@@ -2336,7 +3022,6 @@ async function* runModelFlow(
   }
   if (closing) yield { type: "assistant_text", text: closing };
 
-  const component = pickComponent(state.toolCalls.map((c) => c.tool));
   const preferredTool: Partial<Record<ResultComponent, string>> = {
     financial_outcome: "analyze_funding_gap",
     transfer_comparison: "compare_transfers",
@@ -2510,6 +3195,7 @@ async function* runAgentInternal(
         maxToolCalls,
         signal: opts.signal,
         tools,
+        demoLabel: DETERMINISTIC_DEMO_LABEL,
       });
       return;
     }

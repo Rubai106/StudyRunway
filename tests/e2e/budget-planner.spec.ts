@@ -74,10 +74,18 @@ function expectNoConsoleErrors(errors: string[]) {
   );
 }
 
+async function openChat(page: Page) {
+  await page.goto("/");
+  const chat = page.getByRole("button", { name: "Chat", exact: true });
+  if ((page.viewportSize()?.width ?? 1280) < 768) {
+    await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
+  }
+  await chat.click();
+}
+
 /** Click the welcome-screen demo button and wait for the budget card. */
 async function runSampleDemo(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await openChat(page);
   await page
     .getByRole("button", { name: /Try the sample student budget/ })
     .click();
@@ -139,8 +147,7 @@ test.describe("destination budget planner", () => {
     page,
   }) => {
     const errors = watchConsole(page);
-    await page.goto("/");
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await openChat(page);
     await sendMessage(page, "help me plan my living costs abroad");
 
     // Demo mode cannot reason — it asks an honest clarifying question.
@@ -331,8 +338,7 @@ test.describe("destination budget planner", () => {
       });
     });
 
-    await page.goto("/");
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await openChat(page);
     await sendMessage(page, "check canada budget please");
 
     await expect(
@@ -427,8 +433,7 @@ test.describe("destination budget planner", () => {
     page,
   }) => {
     const errors = watchConsole(page);
-    await page.goto("/");
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await openChat(page);
     const demo = page.getByRole("button", {
       name: /Try the sample student budget/,
     });
@@ -447,8 +452,7 @@ test.describe("destination budget planner", () => {
     page,
   }) => {
     const errors = watchConsole(page);
-    await page.goto("/");
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await openChat(page);
     const stsButton = page.getByRole("button", {
       name: /Try the Safe-to-Send tuition demo/,
     });
