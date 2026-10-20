@@ -21,6 +21,8 @@ import DailyBudgetPlanner from "./DailyBudgetPlanner";
 import ArrivalCostPlanner from "./ArrivalCostPlanner";
 import IncomeShockPlan from "./IncomeShockPlan";
 import RentalSafetyCheck from "./RentalSafetyCheck";
+import { translateDashboard } from "@/lib/dashboardTranslations";
+import type { LanguageCode } from "@/lib/multilingual";
 
 interface DashboardResult {
   component: string;
@@ -80,6 +82,7 @@ interface Props {
   onAsk: (prompt: string) => void;
   onOpenConversation: (messageId: string) => void;
   disabled?: boolean;
+  language: LanguageCode;
 }
 
 function resultEntries(messages: DashboardMessage[]): ResultSource[] {
@@ -312,7 +315,7 @@ function WorkflowStepHeader({
   );
 }
 
-export default function Dashboard({ messages, onAsk, onOpenConversation, disabled = false }: Props) {
+export default function Dashboard({ messages, onAsk, onOpenConversation, disabled = false, language }: Props) {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [today, setToday] = useState("");
   const entries = useMemo(() => resultEntries(messages), [messages]);
@@ -359,24 +362,24 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
   const activeReminders = reminders.filter((reminder) => !reminder.notifiedAt).slice(0, 3);
   const hasFinanceContext = fundingSource !== null || planSource !== null || latestDocument !== null;
   const statusTitle = funding?.hasGap
-    ? "A tuition shortfall needs a plan"
+    ? translateDashboard(language, "statusShortfall")
     : funding && !funding.forecastComplete
-      ? "Some forecast details are missing"
+      ? translateDashboard(language, "statusMissing")
       : funding?.knownNoGap && funding.scholarshipMarkedConfirmed
-      ? "Check the scholarship schedule"
+      ? translateDashboard(language, "statusScholarship")
       : funding?.knownNoGap && funding.confirmedOnlyHasGap
-        ? "Covered if expected funding arrives"
+        ? translateDashboard(language, "statusExpected")
     : funding?.knownNoGap
-      ? "Tuition appears covered in this forecast"
+      ? translateDashboard(language, "statusCovered")
       : fundingSource
-        ? "Review your tuition funding check"
-        : "Start with your tuition and funding dates";
+        ? translateDashboard(language, "statusReview")
+        : translateDashboard(language, "statusStart");
   const scholarshipDelayComplete = scenarioSource?.data["scenarioType"] === "scholarship_delay";
   const workflowSteps = [
-    { number: 1, title: "Check funds against the deadline", complete: fundingSource !== null },
-    { number: 2, title: "Stress-test a late scholarship", complete: scholarshipDelayComplete },
-    { number: 3, title: "Create prioritized next steps", complete: planSource !== null },
-    { number: 4, title: "Prepare a university email draft", complete: emailSource !== null },
+    { number: 1, title: translateDashboard(language, "deadlineTitle"), complete: fundingSource !== null },
+    { number: 2, title: translateDashboard(language, "delayTitle"), complete: scholarshipDelayComplete },
+    { number: 3, title: translateDashboard(language, "actionsTitle"), complete: planSource !== null },
+    { number: 4, title: translateDashboard(language, "emailTitle"), complete: emailSource !== null },
   ];
 
   return (
@@ -384,14 +387,14 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
       <div className="mx-auto max-w-7xl">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold text-[var(--sr-pine)]">StudyRunway overview</p>
-            <h2 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">Your study finances, at a glance</h2>
+            <p className="text-xs font-semibold text-[var(--sr-pine)]">{translateDashboard(language, "kicker")}</p>
+            <h2 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">{translateDashboard(language, "title")}</h2>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--sr-ink)]/65">
-              Deadlines, funding checks, next steps, and reminders from your conversations.
+              {translateDashboard(language, "description")}
             </p>
           </div>
           <p className="rounded-full border border-[var(--sr-line)] bg-white/55 px-3 py-1.5 text-xs text-[var(--sr-ink)]/60">
-            Saved on this browser
+            {translateDashboard(language, "saved")}
           </p>
         </div>
 
@@ -401,10 +404,10 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
               <div className="max-w-2xl">
                 <div className="flex items-center gap-2 text-xs font-semibold text-[var(--sr-pine)]">
                   <WalletCards size={15} aria-hidden="true" />
-                  Guided tuition workflow
+                  {translateDashboard(language, "guided")}
                 </div>
-                <h3 id="dashboard-tuition-plan-title" className="mt-2 text-xl font-bold leading-snug sm:text-2xl">Tuition shortfall plan</h3>
-                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">Check the deadline, test a funding delay, get prioritized next steps, and prepare a message for your university.</p>
+                <h3 id="dashboard-tuition-plan-title" className="mt-2 text-xl font-bold leading-snug sm:text-2xl">{translateDashboard(language, "workflowTitle")}</h3>
+                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">{translateDashboard(language, "workflowDescription")}</p>
               </div>
               <span className="rounded-full border border-[var(--sr-line)] bg-white/60 px-3 py-1.5 text-[11px] font-semibold text-[var(--sr-ink)]/60">
                 {workflowSteps.filter((step) => step.complete).length} of 4 steps ready
@@ -447,14 +450,14 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
                 <WorkflowStepHeader number={1} title="Check funds against the deadline" complete={fundingSource !== null} />
                 <p className="mt-2 text-xs leading-relaxed text-[var(--sr-ink)]/60">Compare money available by the due date with tuition and other dated bills.</p>
                 <button type="button" onClick={() => onAsk("Create or update my tuition shortfall plan. Ask for any missing tuition amount, currency, due date, confirmed funds available by that date, and expected funding amounts and arrival dates. Treat an unqualified $ as USD and say that assumption. Once enough details are confirmed, calculate the dated funding gap and separate available, expected, and uncertain money. Do not invent figures or dates.")} disabled={disabled} className="mt-3 rounded-lg bg-[var(--sr-pine)] px-3 py-2 text-xs font-semibold text-white transition hover:bg-[var(--sr-pine)]/90 disabled:opacity-50">
-                  {fundingSource ? "Update funding check" : "Start funding check"}
+                  {translateDashboard(language, fundingSource ? "updateFunding" : "startFunding")}
                 </button>
               </li>
               <li className="rounded-2xl border border-[var(--sr-line)] bg-white/70 p-4">
                 <WorkflowStepHeader number={2} title="Stress-test a late scholarship" complete={scholarshipDelayComplete} />
                 <p className="mt-2 text-xs leading-relaxed text-[var(--sr-ink)]/60">Compare your forecast with a clearly labeled 14-day delay. This is a what-if, not a prediction.</p>
                 <button type="button" onClick={() => onAsk("In my tuition shortfall plan, simulate what happens if the scholarship arrives 14 days late. Use only my latest confirmed tuition and funding details; compare the baseline and delayed scenario, including the remaining shortfall and date. If there is no single dated scholarship in the plan, ask me which funding source and expected date to use. Do not change my baseline plan or treat the scholarship as guaranteed.")} disabled={disabled} className="mt-3 rounded-lg border border-[var(--sr-line)] bg-white px-3 py-2 text-xs font-semibold text-[var(--sr-pine)] transition hover:bg-[var(--sr-mist)] disabled:opacity-50">
-                  {scholarshipDelayComplete ? "Re-run delay scenario" : "Test a 14-day delay"}
+                  {translateDashboard(language, scholarshipDelayComplete ? "rerunDelay" : "testDelay")}
                 </button>
                 {scenarioSource && <button type="button" onClick={() => onOpenConversation(scenarioSource.messageId)} className="ml-3 text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4">Review latest scenario</button>}
               </li>
@@ -473,7 +476,7 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
                 )}
                 <div className="mt-3 flex items-center gap-3">
                   <button type="button" onClick={() => onAsk("Build or update the prioritized next steps for my tuition shortfall plan using my confirmed funding forecast. Put the earliest tuition deadline and amount gap first, then list funding dates that need confirmation and any missing information. Do not assume a payment plan, extension, grant, or scholarship is approved. Show what to verify with the university.")} disabled={disabled} className="rounded-lg border border-[var(--sr-line)] bg-white px-3 py-2 text-xs font-semibold text-[var(--sr-pine)] transition hover:bg-[var(--sr-mist)] disabled:opacity-50">
-                    {planSource ? "Update next steps" : "Build next steps"}
+                    {translateDashboard(language, planSource ? "updateSteps" : "buildSteps")}
                   </button>
                   {planSource && <button type="button" onClick={() => onOpenConversation(planSource.messageId)} className="text-xs font-semibold text-[var(--sr-pine)] underline underline-offset-4">Review action plan</button>}
                 </div>
