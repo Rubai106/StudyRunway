@@ -117,6 +117,10 @@ test.afterEach(async ({ page }) => {
 test("provider indicator honestly shows Demo mode when unconfigured", async ({
   page,
 }) => {
+  // The provider badge is inside the collapsible mobile navigation.
+  if ((page.viewportSize()?.width ?? 1280) < 1024) {
+    await page.getByRole("button", { name: "Open navigation menu" }).click();
+  }
   // Works against the mock and the real /api/agent/status alike: no provider
   // is configured in either, so "Demo mode" must show.
   await expect(page.getByText("Demo mode", { exact: true })).toBeVisible();

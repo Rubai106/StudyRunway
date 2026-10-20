@@ -33,7 +33,7 @@ test("structured funding form submits multiple financial records to the real for
   await page.getByLabel("Payment deadline", { exact: true }).nth(1).fill("2027-02-01");
   await page.getByRole("button", { name: "+ Add funding source" }).click();
   await page.getByLabel(/Name/).nth(3).fill("Expected scholarship");
-  await page.getByLabel("Funding type").nth(1).selectOption("scholarship");
+  await page.getByLabel("Type").nth(1).selectOption("scholarship");
   await page.getByLabel(/Amount/).nth(3).fill("500");
   await page.getByLabel("Funding status").nth(1).selectOption("estimated");
   await page.getByLabel("Expected date", { exact: true }).fill("2027-01-01");

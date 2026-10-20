@@ -427,6 +427,10 @@ test.describe("interaction states", () => {
   }) => {
     await installMocks(page);
     await openChat(page);
+    // The provider badge is inside the collapsible mobile navigation.
+    if ((page.viewportSize()?.width ?? 1280) < 1024) {
+      await page.getByRole("button", { name: "Open navigation menu" }).click();
+    }
     await expect(page.getByText("Demo mode", { exact: true })).toBeVisible();
   });
 });
