@@ -974,7 +974,7 @@ When asked for JSON, output ONLY valid JSON — no prose, no code fences.`;
 
 function systemPromptForLanguage(language?: LanguageCode): string {
   if (!language || language === "en") return SYSTEM_PROMPT;
-  return `${SYSTEM_PROMPT}\\n\\n${responseLanguageInstruction(language)} Keep tool names, schema keys, required enum values, and machine-readable fields in their specified exact form; translate only user-facing prose.`;
+  return `${SYSTEM_PROMPT}\n\n${responseLanguageInstruction(language)} Keep tool names, schema keys, required enum values, and machine-readable fields in their specified exact form; translate only user-facing prose.`;
 }
 
 function buildContextMessage(state: TaskState, userMessage: string): string {
