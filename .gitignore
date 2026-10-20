@@ -46,6 +46,9 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
+# Local screenshots are regenerated from the app; do not commit stale UI captures.
+docs/screenshots/*.png
+
 # Temporary archives and local backups
 *.zip
 *.bak
