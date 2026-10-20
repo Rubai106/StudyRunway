@@ -19,7 +19,7 @@ tests; it does not imply a live external provider was verified.
 | Destination banking setup | Added a grounded official-research topic and dashboard guide for account documents, address/residency conditions, timing, fees, and pre-arrival access where cited sources support those details. | Country rules and provider terms differ. Provider-specific domains must pass the official-source check; no account eligibility or remote opening is promised. |
 | Credit guide for students without a cosigner | The destination credit guide now also asks for official processes or non-lending alternatives when a student lacks local history or a cosigner. | Alternatives are shown only if a cited official source confirms them; the guide does not recommend borrowing or promise acceptance. |
 | Arrival and emergency costs | Added a browser-local planner for one-time housing/setup, travel, health, insurance, books, and paperwork costs, with dates, currency, paid/planned state, and a source/basis label. It can send planned costs to a draft funding review only after the user clicks. | User entries are estimates or quotes, not independently verified. The planner keeps currencies separate and does not invent local prices. Grounded destination research returns amounts only when official citations state them. |
-| Financial trust and security | Safeguards include input validation, tool allow-lists, document-injection checks, identifier redaction, confirmation gates, and privacy-limited audit events. | Demo access remains enabled by choice. Audit records go to stdout unless deployment logging is configured; authentication and durable audit storage are not provided here. |
+| Financial trust and security | Safeguards include Google OAuth sign-in, verified Google email checks, server-side session validation, per-user task isolation, input validation, tool allow-lists, document-injection checks, identifier redaction, confirmation gates, and privacy-limited audit events. | Google OAuth client credentials must be configured per environment. Audit records go to stdout unless deployment logging is configured; task state remains in-memory and is not durable. |
 | Automated agent evaluation | Deterministic feature/pipeline evaluations run with typechecking and lint in CI on pushes and pull requests. `npm run verify:live-ai` provides a separate opt-in, real-Vertex check. | CI uses scripted or mocked model/provider responses; the live check may incur Vertex charges and currently reports the Search citation failure described above. Neither check supplies real transfer quotes. |
 
 ## Merged payment-safety workflow
@@ -61,7 +61,7 @@ after the student selects its funding-plan action.
 
 ## Decisions that require a later provider or product choice
 
-- Keep demo access; no OAuth sign-in is configured.
+- Configure Google OAuth credentials and `AUTH_SECRET` for local and Cloud Run environments.
 - Keep institutional email as draft-only.
 - Do not initiate tuition payments; no payment rail is connected.
 - The chat `compare_transfers` tool still uses sample/reference comparisons.

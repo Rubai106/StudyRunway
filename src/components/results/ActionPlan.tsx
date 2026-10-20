@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { STORAGE_PREFIX } from "../chat/persist";
 import { asArray, asString, isRecord } from "./shared";
 import { requestReminder } from "@/lib/reminders";
+import { getUserStorageKey } from "@/lib/userStorage";
 
 interface PlanItem {
   id: string;
@@ -42,7 +43,7 @@ function planKey(title: string, items: PlanItem[]): string {
   for (let i = 0; i < raw.length; i++) {
     hash = (hash * 31 + raw.charCodeAt(i)) | 0;
   }
-  return `${STORAGE_PREFIX}plan.${Math.abs(hash).toString(36)}`;
+  return getUserStorageKey(`${STORAGE_PREFIX}plan.${Math.abs(hash).toString(36)}`);
 }
 
 export default function ActionPlan({ data }: { data: Record<string, unknown> }) {

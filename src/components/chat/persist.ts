@@ -5,6 +5,7 @@
 
 import type { ClarifyQuestion } from "@/lib/events";
 import { REMINDERS_CHANGE_EVENT } from "@/lib/reminders";
+import { getActiveStorageScope, getUserStorageKey } from "@/lib/userStorage";
 
 export const STORAGE_PREFIX = "studyrunway.";
 export const LAST_SESSION_KEY = `${STORAGE_PREFIX}last-session`;
@@ -46,7 +47,7 @@ function isLocalStorageAvailable(): boolean {
 }
 
 export function transcriptKey(sessionId: string): string {
-  return `${STORAGE_PREFIX}chat.${sessionId}`;
+  return getUserStorageKey(`${STORAGE_PREFIX}chat.${sessionId}`);
 }
 
 export function saveTranscript(
@@ -59,7 +60,7 @@ export function saveTranscript(
       transcriptKey(sessionId),
       JSON.stringify({ sessionId, savedAt: Date.now(), messages }),
     );
-    window.localStorage.setItem(LAST_SESSION_KEY, sessionId);
+    window.localStorage.setItem(getUserStorageKey(LAST_SESSION_KEY), sessionId);
   } catch {
     // Storage full or blocked — the conversation still works in memory.
   }
@@ -81,7 +82,7 @@ export function loadTranscript(sessionId: string): StoredMessage[] | null {
 
 export function lastSessionId(): string | null {
   if (!isLocalStorageAvailable()) return null;
-  return window.localStorage.getItem(LAST_SESSION_KEY);
+    return window.localStorage.getItem(getUserStorageKey(LAST_SESSION_KEY));
 }
 
 /** Remove every StudyRunway-owned key from localStorage. Returns key count removed. */
@@ -91,7 +92,12 @@ export function wipeStudyRunwayData(): number {
   try {
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i);
-      if (key && key.startsWith(STORAGE_PREFIX)) keys.push(key);
+      const scope = getActiveStorageScope();
+      if (
+        key &&
+        key.startsWith(STORAGE_PREFIX) &&
+        (scope === "local" || key.endsWith(`.__user_${scope}`))
+      ) keys.push(key);
     }
     for (const key of keys) window.localStorage.removeItem(key);
     window.dispatchEvent(new Event(REMINDERS_CHANGE_EVENT));
@@ -105,7 +111,7 @@ export function wipeStudyRunwayData(): number {
 export function clearLastSession(): void {
   if (!isLocalStorageAvailable()) return;
   try {
-    window.localStorage.removeItem(LAST_SESSION_KEY);
+    window.localStorage.removeItem(getUserStorageKey(LAST_SESSION_KEY));
   } catch {
     // Storage may be blocked; the next startup still validates the session.
   }

@@ -52,7 +52,15 @@ button → `AbortSignal`) ends the stream quietly mid-phase.
 
 ## 2. Task state model (`src/lib/agent/state.ts`)
 
-Per-session `TaskState`, kept **in memory on the server** (a `Map`; no DB):
+Per-session `TaskState`, validated on every read/write and keyed by the
+authenticated user's HMAC-scoped session ID. Local development uses a
+process-local `Map`. Production can use the Firestore REST adapter in
+`src/lib/agent/firestoreSessionStore.ts`; each API request hydrates the task,
+then commits changed state with a Firestore update-time precondition. Concurrent
+writes fail with 409 rather than silently overwriting one another. The adapter
+stores one JSON payload per session in `studyrunway_sessions`, with a 180-day
+application retention window. It never writes prompts or financial state to the
+audit log.
 
 - `userGoal`, `status` (`planning | clarifying | executing | verifying | done | failed`)
 - `confirmedFacts[]` (source-tagged; only from user answers, never invented;
@@ -75,10 +83,14 @@ Approve/Deny decisions.
 The server emits one-line JSON audit records for agent turns, clarification
 requests and submissions, approval decisions, tool outcomes, and task deletion.
 Records use the opaque server-generated task ID for correlation. They exclude
-session IDs, prompts, answer values, document contents, tool arguments/results,
-provider error bodies, and credentials. On Google Cloud, stdout records can be
-ingested by Cloud Logging; retention, access controls, and export destinations
-must be configured on the deployment. Local stdout alone is not durable or
+session IDs, prompts, answer values, amounts, document contents, tool
+arguments/results, provider error bodies, and credentials. With
+`STUDYRUNWAY_AUDIT_STORE=cloud-logging`, the server uses ADC to write entries to
+the `studyrunway-audit` Cloud Logging log; the Cloud Run service account needs
+`roles/logging.logWriter`. Project sinks and bucket retention policies govern
+storage (the default `_Default` bucket retains logs for 30 days). A failed API
+write falls back to structured stdout, which Cloud Run also collects; this
+fallback is visible in the entry. Local stdout alone is not durable or
 tamper-evident storage.
 
 ## 3. Provider adapters (`src/lib/providers/`)
@@ -240,8 +252,11 @@ the same). Demo mode is fully offline — the engine and dataset are local.
 
 ## 9. Data & retention
 
-- Server task state: in-memory only, per process. Restarting the server loses
-  it; there is no database, no cross-device sync.
+- Server task state: in-memory in local development; Firestore-backed in
+  production when `STUDYRUNWAY_SESSION_STORE=firestore` and
+  `FIRESTORE_PROJECT_ID` are configured. Stored state is user-scoped and expires
+  after 180 days. Browser-only records remain in account-namespaced localStorage
+  on the current device; they are not synced across devices.
 - Client: transcripts persist in `localStorage` under the `studyrunway.`
   prefix (`studyrunway.chat.<sessionId>`, `studyrunway.last-session`). "Delete
   my data" (header button + mobile link, with a confirm dialog) calls

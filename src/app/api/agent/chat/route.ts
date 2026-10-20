@@ -24,6 +24,8 @@ import { deleteSession, getTask } from "@/lib/agent/state";
 import { writeAuditEvent } from "@/lib/agent/audit";
 import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
 import { checkRateLimit, requestClientKey, RATE_MAX_REQUESTS, RATE_WINDOW_MS } from "@/lib/agent/rateLimit";
+import { requireApiUser, scopeSessionId } from "@/lib/auth/requireUser";
+import { withPersistentSession } from "@/lib/agent/firestoreSessionStore";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,6 +37,8 @@ function encodeEvent(ev: AgentEvent): string {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  const user = await requireApiUser();
+  if (user instanceof Response) return user;
   const persistenceError = sessionPersistenceResponse();
   if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);
@@ -75,7 +79,7 @@ export async function POST(req: Request): Promise<Response> {
   if (sidErr) {
     return Response.json({ error: sidErr }, { status: 400 });
   }
-  const sessionId = body.sessionId as string;
+  const sessionId = scopeSessionId(user.id, body.sessionId as string);
   const message = typeof body.message === "string" ? body.message : "";
   const signal = req.signal;
 
@@ -116,17 +120,19 @@ export async function POST(req: Request): Promise<Response> {
     },
   });
 
-  return new Response(stream, {
+  return withPersistentSession(sessionId, async () => new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     },
-  });
+  }));
 }
 
 export async function DELETE(req: Request): Promise<Response> {
+  const user = await requireApiUser();
+  if (user instanceof Response) return user;
   const persistenceError = sessionPersistenceResponse();
   if (persistenceError) return persistenceError;
   if (requestOriginError(req)) {
@@ -140,12 +146,14 @@ export async function DELETE(req: Request): Promise<Response> {
   if (sidErr) {
     return Response.json({ error: sidErr }, { status: 400 });
   }
-  const sessionId = searchParams.get("sessionId") as string;
-  const taskId = getTask(sessionId)?.taskId;
-  const deleted = deleteSession(sessionId);
-  if (!deleted) {
-    return Response.json({ ok: false, error: "unknown session" }, { status: 404 });
-  }
-  if (taskId) writeAuditEvent({ type: "agent.session.deleted", taskId });
-  return Response.json({ ok: true, deleted: true });
+  const sessionId = scopeSessionId(user.id, searchParams.get("sessionId") as string);
+  return withPersistentSession(sessionId, async () => {
+    const taskId = getTask(sessionId)?.taskId;
+    const deleted = deleteSession(sessionId);
+    if (!deleted) {
+      return Response.json({ ok: false, error: "unknown session" }, { status: 404 });
+    }
+    if (taskId) await writeAuditEvent({ type: "agent.session.deleted", taskId });
+    return Response.json({ ok: true, deleted: true });
+  });
 }

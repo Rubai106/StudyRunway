@@ -23,6 +23,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CLUSTER_ID, layoutNodes } from "./nodeState";
 import { resetVisualizerStore, useVisualizerState } from "./store";
+import { getUserStorageKey } from "@/lib/userStorage";
 import { ToolList } from "./ToolList";
 import { PeekPanel } from "./PeekPanel";
 import { VisualizerErrorBoundary } from "./VisualizerErrorBoundary";
@@ -68,7 +69,7 @@ export function ToolVisualizer({ className }: { className?: string }) {
   const [threeEnabled, setThreeEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     try {
-      return window.localStorage.getItem(MODE_KEY) !== "off";
+      return window.localStorage.getItem(getUserStorageKey(MODE_KEY)) !== "off";
     } catch {
       return true;
     }
@@ -89,7 +90,7 @@ export function ToolVisualizer({ className }: { className?: string }) {
     setThreeEnabled((prev) => {
       const next = !prev;
       try {
-        window.localStorage.setItem(MODE_KEY, next ? "on" : "off");
+        window.localStorage.setItem(getUserStorageKey(MODE_KEY), next ? "on" : "off");
       } catch {
         // ignore storage failures
       }

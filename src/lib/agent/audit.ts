@@ -3,9 +3,10 @@
  *
  * Keep this schema deliberately narrow: prompts, answers, document contents,
  * tool arguments/results, session IDs, and provider error bodies must never be
- * added here. JSON lines on stdout can be ingested by Cloud Logging on Google
- * Cloud deployments; retention and access controls are configured there.
+ * added here. Google Cloud deployments can send these records directly to
+ * Cloud Logging. Local development keeps using structured stdout.
  */
+import { GoogleAuth } from "google-auth-library";
 import type { TaskStatus } from "./state";
 
 type QuestionKind = "quick_replies" | "date" | "amount" | "currency" | "form";
@@ -43,10 +44,30 @@ export type AgentAuditEvent =
       ok: boolean;
       durationMs: number;
     }
+  | {
+      type: "agent.plan.changed";
+      taskId: string;
+      action: "funding_check" | "budget_apply" | "budget_revert";
+      ok: boolean;
+    }
+  | {
+      type: "agent.safe_action.completed";
+      taskId?: string;
+      action: string;
+      ok: boolean;
+    }
   | { type: "agent.session.deleted"; taskId: string };
 
-/** Emit one JSON object per line for structured log ingestion. */
-export function writeAuditEvent(event: AgentAuditEvent): void {
+type SafeAuditRecord = Record<string, unknown> & {
+  severity: "INFO";
+  logName: "studyrunway-audit";
+  schemaVersion: 1;
+  timestamp: string;
+  event: AgentAuditEvent["type"];
+};
+
+/** Create only the approved, privacy-limited fields for an audit event. */
+function createAuditRecord(event: AgentAuditEvent): SafeAuditRecord {
   const record: Record<string, unknown> = {
     severity: "INFO",
     logName: "studyrunway-audit",
@@ -57,7 +78,9 @@ export function writeAuditEvent(event: AgentAuditEvent): void {
 
   // Copy fields one by one. Never spread caller objects into an audit record:
   // runtime payloads can contain more than their TypeScript type declares.
-  if ("taskId" in event) record.taskId = safeTaskId(event.taskId);
+  if ("taskId" in event && typeof event.taskId === "string") {
+    record.taskId = safeTaskId(event.taskId);
+  }
   switch (event.type) {
     case "agent.turn.started":
       record.resumed = Boolean(event.resumed);
@@ -85,12 +108,123 @@ export function writeAuditEvent(event: AgentAuditEvent): void {
       record.ok = Boolean(event.ok);
       record.durationMs = safeCount(event.durationMs, 86_400_000);
       break;
+    case "agent.plan.changed":
+      record.action = isPlanAction(event.action) ? event.action : "funding_check";
+      record.ok = Boolean(event.ok);
+      break;
+    case "agent.safe_action.completed":
+      record.action = safeToolName(event.action);
+      record.ok = Boolean(event.ok);
+      break;
     case "agent.session.deleted":
       break;
   }
 
+  return record as SafeAuditRecord;
+}
+
+/**
+ * Persist an approved audit record. Cloud Logging write failures fall back to
+ * structured stdout so normal planning requests still work; Cloud Run also
+ * ingests stdout, and an explicit marker makes the fallback visible.
+ */
+export async function writeAuditEvent(event: AgentAuditEvent): Promise<void> {
+  const record = createAuditRecord(event);
+  const store = (process.env.STUDYRUNWAY_AUDIT_STORE ?? "stdout").trim().toLowerCase();
+
   try {
-    console.info(JSON.stringify(record));
+    if (store === "cloud-logging") {
+      await writeCloudLoggingRecord(record);
+      return;
+    }
+  } catch {
+    emitStdoutFallback(record, true);
+    return;
+  }
+
+  // Unknown store values fail safely to stdout and are not treated as durable.
+  emitStdoutFallback(record, store !== "stdout");
+}
+
+/** Build a Cloud Logging entry from fields supplied by the trusted runtime. */
+function cloudLoggingPayload(record: SafeAuditRecord, projectId: string) {
+  return {
+    logName: `projects/${projectId}/logs/studyrunway-audit`,
+    resource: cloudRunResource(projectId),
+    entries: [
+      {
+        timestamp: record.timestamp,
+        severity: record.severity,
+        insertId: crypto.randomUUID(),
+        jsonPayload: {
+          schemaVersion: record.schemaVersion,
+          event: record.event,
+          ...auditFields(record),
+        },
+      },
+    ],
+  };
+}
+
+function auditFields(record: SafeAuditRecord): Record<string, unknown> {
+  const { severity: _severity, logName: _logName, schemaVersion: _schemaVersion, timestamp: _timestamp, event: _event, ...fields } = record;
+  void _severity;
+  void _logName;
+  void _schemaVersion;
+  void _timestamp;
+  void _event;
+  return fields;
+}
+
+function cloudRunResource(projectId: string) {
+  const service = process.env.K_SERVICE;
+  const revision = process.env.K_REVISION;
+  const location = process.env.K_REGION;
+  if (service && revision && location) {
+    return {
+      type: "cloud_run_revision",
+      labels: {
+        project_id: projectId,
+        location,
+        service_name: service,
+        revision_name: revision,
+        configuration_name: process.env.K_CONFIGURATION ?? "",
+      },
+    };
+  }
+  return { type: "global", labels: { project_id: projectId } };
+}
+
+async function writeCloudLoggingRecord(record: SafeAuditRecord): Promise<void> {
+  const projectId = (
+    process.env.GOOGLE_CLOUD_PROJECT ??
+    process.env.GCLOUD_PROJECT ??
+    process.env.VERTEX_AI_PROJECT
+  )?.trim();
+  if (!projectId) throw new Error("Cloud Logging project is not configured");
+
+  const auth = new GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/logging.write"],
+  });
+  const client = await auth.getClient();
+  const { token } = await client.getAccessToken();
+  if (!token) throw new Error("Cloud Logging credentials are unavailable");
+
+  const response = await fetch("https://logging.googleapis.com/v2/entries:write", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(cloudLoggingPayload(record, projectId)),
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok) throw new Error("Cloud Logging rejected the audit record");
+}
+
+function emitStdoutFallback(record: SafeAuditRecord, misconfigured = false): void {
+  try {
+    console.info(JSON.stringify(misconfigured ? { ...record, auditStoreFallback: true } : record));
   } catch {
     // Audit output must not break a user's financial-planning request.
   }
@@ -118,4 +252,8 @@ function safeStatus(value: TaskStatus): TaskStatus {
 
 function isQuestionKind(value: string): value is QuestionKind {
   return ["quick_replies", "date", "amount", "currency", "form"].includes(value);
+}
+
+function isPlanAction(value: string): value is Extract<AgentAuditEvent, { type: "agent.plan.changed" }>["action"] {
+  return ["funding_check", "budget_apply", "budget_revert"].includes(value);
 }

@@ -9,7 +9,8 @@ Screenshots are intentionally not included in this patched release: the bundled 
 
 **1. Fixed budget.** "Meet a student with a fixed budget: €900 a month to
 live in Limerick, Ireland, sharing a flat and cooking at home." Click **"Try
-the sample student budget"** on the welcome screen. No key, no account —
+the sample student budget"** on the welcome screen. No AI key is needed; Google
+sign-in must be configured and completed —
 the app runs the real budget engine through the real tool path and says so
 on screen ("Demo mode — no model provider configured").
 

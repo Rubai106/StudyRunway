@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isSupportedCurrency } from "@/lib/currency";
 import { requestOriginError } from "@/lib/agent/session";
 import { checkRateLimit, requestClientKey, RATE_WINDOW_MS, WISE_RATE_MAX_REQUESTS } from "@/lib/agent/rateLimit";
+import { requireApiUser } from "@/lib/auth/requireUser";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -72,6 +73,8 @@ function safeJsonError(status: number): { status: number; message: string } {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  const user = await requireApiUser();
+  if (user instanceof Response) return user;
   if (process.env.WISE_QUOTES_ENABLED?.trim().toLowerCase() !== "true") {
     return Response.json(
       { ok: false, error: "Wise quote previews are disabled on this deployment. Set WISE_QUOTES_ENABLED=true on the server to enable them." },

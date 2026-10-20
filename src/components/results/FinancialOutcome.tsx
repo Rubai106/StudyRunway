@@ -46,6 +46,8 @@ interface Props {
 export default function FinancialOutcome({ data, onCorrectAssumption }: Props) {
   const verdict = asString(data["verdict"] ?? data["summary"]);
   const currency = asString(data["currency"] ?? data["planningCurrency"]);
+  const hasGap = data["hasGap"] === true;
+  const forecastComplete = data["forecastComplete"] !== false;
   const deadline = asString(data["deadline"] ?? data["gapDate"]);
   const amounts = asArray<Record<string, unknown>>(data["amounts"]);
   const shortfall = isRecord(data["shortfall"])
@@ -60,12 +62,36 @@ export default function FinancialOutcome({ data, onCorrectAssumption }: Props) {
       : null;
   const assumptions = readAssumptions(data["assumptions"]);
   const fundingSplit = isRecord(data["fundingSplit"]) ? data["fundingSplit"] : null;
+  const confirmedOnly = isRecord(data["confirmedOnly"]) ? data["confirmedOnly"] : null;
+  const cashFlow = isRecord(data["cashFlow"]) ? data["cashFlow"] : null;
+  const fundingSources = asArray<Record<string, unknown>>(cashFlow?.["fundingSources"]);
+  const uncertainSources = fundingSources
+    .filter((source) => ["conditional", "estimated", "unverified"].includes(asString(source["status"])));
+  const scholarshipsMarkedConfirmed = fundingSources
+    .filter((source) => source["kind"] === "scholarship" && source["status"] === "confirmed_pending");
+  const sourcesToReview = [...uncertainSources, ...scholarshipsMarkedConfirmed];
   const incomplete = asArray<Record<string, unknown>>(data["incomplete"]);
   const aiAnalysis = isRecord(data["aiAnalysis"]) ? data["aiAnalysis"] : null;
 
   const [correcting, setCorrecting] = useState<string | null>(null);
   const [newValue, setNewValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const needsCaution = hasGap || !forecastComplete || confirmedOnly?.["hasGap"] === true || scholarshipsMarkedConfirmed.length > 0;
+  const resultTitle = hasGap
+    ? "A funding gap appears in this plan"
+    : !forecastComplete
+      ? "Some details are still missing"
+      : confirmedOnly?.["hasGap"] === true
+        ? "Coverage depends on unconfirmed funding"
+        : scholarshipsMarkedConfirmed.length > 0
+          ? "Check the scholarship schedule"
+        : "No gap in the listed plan";
+
+  const certaintyLabel = (status: string) => ({
+    conditional: "Conditional award",
+    estimated: "Expected, not confirmed",
+    unverified: "Not verified",
+  } as Record<string, string>)[status] ?? "Status needs review";
 
   const submitCorrection = (assumption: Assumption) => {
     if (!newValue.trim()) {
@@ -87,7 +113,34 @@ export default function FinancialOutcome({ data, onCorrectAssumption }: Props) {
   return (
     <div>
       {verdict && (
-        <p className="text-sm leading-relaxed text-[var(--sr-ink)]">{verdict}</p>
+        <section
+          role="status"
+          aria-label="Funding result"
+          className={`rounded-xl border px-4 py-3 ${needsCaution ? "border-[var(--sr-amber)]/45 bg-[#fbf3e2]/65" : "border-[var(--sr-pine)]/25 bg-[var(--sr-pine)]/5"}`}
+        >
+          <p className={`text-sm font-semibold ${needsCaution ? "text-[var(--sr-amber)]" : "text-[var(--sr-pine)]"}`}>{resultTitle}</p>
+          <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-[var(--sr-ink)]">{verdict}</p>
+          {confirmedOnly && (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2" aria-label="Compare forecast certainty">
+              <div className="rounded-lg border border-[var(--sr-line)] bg-white/75 px-3 py-2.5">
+                <p className="text-xs font-semibold text-[var(--sr-ink)]">All listed incoming funds</p>
+                <p className="mt-1 text-xs text-[var(--sr-ink)]/70">
+                  {hasGap
+                    ? `Short by ${asString(data["shortfall"], formatMinorMoney(asNumber(data["shortfallMinor"]), currency))}${asString(data["gapDate"]) ? ` on ${asString(data["gapDate"])}` : ""}.`
+                    : forecastComplete ? "No gap on the dates and amounts listed." : "The result is incomplete; review the missing items below."}
+                </p>
+              </div>
+              <div className={`rounded-lg border px-3 py-2.5 ${confirmedOnly["hasGap"] === true ? "border-[var(--sr-amber)]/35 bg-[var(--sr-amber)]/5" : "border-[var(--sr-line)] bg-white/75"}`}>
+                <p className="text-xs font-semibold text-[var(--sr-ink)]">Funds listed as confirmed only</p>
+                <p className="mt-1 text-xs text-[var(--sr-ink)]/70">
+                  {confirmedOnly["hasGap"] === true
+                    ? `Short by ${asString(confirmedOnly["shortfall"], "an unknown amount")}${asString(confirmedOnly["gapDate"]) ? ` on ${asString(confirmedOnly["gapDate"] as string)}` : ""}.`
+                    : forecastComplete ? "No gap using the confirmed amounts listed." : "Known amounts only; missing details could change this."}
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
       )}
       {amounts.length > 0 && (
         <dl className="mt-3 grid gap-2">
@@ -130,15 +183,39 @@ export default function FinancialOutcome({ data, onCorrectAssumption }: Props) {
         </div>
       )}
       {fundingSplit && (
-        <div className="mt-3 rounded-xl border border-[var(--sr-line)] bg-[var(--sr-mist)]/50 px-3 py-2.5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--sr-ink)]/60">Funding split</p>
-          <dl className="mt-2 grid gap-1 text-xs sm:grid-cols-2">
+        <div className="mt-3 rounded-xl border border-[var(--sr-line)] bg-[var(--sr-mist)]/35 px-3 py-3">
+          <p className="text-sm font-semibold text-[var(--sr-ink)]">Where the money comes from</p>
+          <dl className="mt-2 grid gap-x-5 gap-y-2 text-xs sm:grid-cols-2">
             <div className="flex justify-between gap-3"><dt>Available now</dt><dd className="font-semibold tabular-nums">{asString(fundingSplit["inHand"])}</dd></div>
-            <div className="flex justify-between gap-3"><dt>Confirmed future</dt><dd className="font-semibold tabular-nums">{asString(fundingSplit["confirmedInflow"])}</dd></div>
-            <div className="flex justify-between gap-3"><dt>Expected / unconfirmed</dt><dd className="font-semibold tabular-nums">{asString(fundingSplit["uncertainInflow"])}</dd></div>
-            <div className="flex justify-between gap-3"><dt>Planned outflow</dt><dd className="font-semibold tabular-nums">{asString(fundingSplit["totalOutflow"])}</dd></div>
+            <div className="flex justify-between gap-3"><dt>Listed as confirmed and scheduled</dt><dd className="font-semibold tabular-nums">{asString(fundingSplit["confirmedInflow"])}</dd></div>
+            <div className="flex justify-between gap-3"><dt>Expected or unconfirmed</dt><dd className="font-semibold tabular-nums">{asString(fundingSplit["uncertainInflow"])}</dd></div>
+            <div className="flex justify-between gap-3"><dt>Costs in this plan</dt><dd className="font-semibold tabular-nums">{asString(fundingSplit["totalOutflow"])}</dd></div>
           </dl>
         </div>
+      )}
+      {sourcesToReview.length > 0 && (
+        <section className="mt-3 rounded-xl border border-[var(--sr-amber)]/40 bg-[#fbf3e2]/55 px-3 py-3" aria-label="Review funding certainty">
+          <h3 className="text-sm font-semibold text-[var(--sr-ink)]">Review funding certainty</h3>
+          <p className="mt-1 text-xs leading-relaxed text-[var(--sr-ink)]/70">StudyRunway does not verify funding with the source. Expected or conditional money is not guaranteed. Count a scholarship as confirmed only after its award and payment schedule are confirmed.</p>
+          <ul className="mt-2 divide-y divide-[var(--sr-amber)]/15">
+            {sourcesToReview.map((source, index) => {
+              const label = asString(source["label"], "Funding source");
+              const status = asString(source["status"]);
+              const amountMinor = asNumber(source["amountMinor"]);
+              const sourceCurrency = asString(source["currency"], currency);
+              const date = asString(source["expectedDate"] ?? source["availableDate"]);
+              const statusText = scholarshipsMarkedConfirmed.includes(source)
+                ? "Listed as confirmed · verify award and date"
+                : certaintyLabel(status);
+              return (
+                <li key={`${label}-${date}-${index}`} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 first:pt-1 last:pb-0">
+                  <span className="min-w-0 text-xs font-medium text-[var(--sr-ink)]">{label}<span className="ml-2 font-normal text-[var(--sr-ink)]/60">{statusText}{date ? ` · ${date}` : " · date not provided"}</span></span>
+                  <span className="shrink-0 text-xs font-semibold tabular-nums text-[var(--sr-ink)]">{amountMinor === null ? "Amount missing" : formatMinorMoney(amountMinor, sourceCurrency)}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
       {incomplete.length > 0 && (
         <Disclosure label={`Needs attention (${incomplete.length})`} defaultOpen>

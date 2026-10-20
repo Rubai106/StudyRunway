@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LayoutDashboard, MessageSquareText } from "lucide-react";
+import { LayoutDashboard, Menu as MenuIcon, MessageSquareText, X } from "lucide-react";
 import type { AgentStreamEvent, ClarifyQuestion } from "@/lib/events";
 import { publishAgentEvent } from "@/lib/events";
 import { SAMPLE_BUDGET_MESSAGE, SAMPLE_SAFE_TO_SEND_MESSAGE } from "@/lib/demo";
@@ -13,6 +13,8 @@ import AssistantMarkdown from "./AssistantMarkdown";
 import ReminderCenter from "../reminders/ReminderCenter";
 import Dashboard from "../dashboard/Dashboard";
 import ResultCard from "../results";
+import { SignOutButton } from "../auth/GoogleSignIn";
+import { setUserStorageScope } from "@/lib/userStorage";
 import {
   clearLastSession,
   filterPersistableResults,
@@ -90,8 +92,27 @@ const PHASE_LABELS: Record<string, string> = {
   verifying: "Double-checking the numbers…",
 };
 
-export default function ChatWorkspace() {
+export default function ChatWorkspace({ storageScope }: { storageScope: string }) {
+  const [storageReady, setStorageReady] = useState(false);
+  useEffect(() => {
+    setUserStorageScope(storageScope);
+    setStorageReady(true);
+  }, [storageScope]);
+
+  if (!storageReady) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[var(--sr-paper)] text-sm text-[var(--sr-ink)]/60" aria-busy="true">
+        Opening your private workspace…
+      </main>
+    );
+  }
+
+  return <ChatWorkspaceContent />;
+}
+
+function ChatWorkspaceContent() {
   const [activeView, setActiveView] = useState<"overview" | "chat">("overview");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string>(() => newId());
   const [sessionReady, setSessionReady] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -541,13 +562,14 @@ export default function ChatWorkspace() {
   );
 
   return (
-    <div className="flex h-dvh flex-col bg-[var(--sr-paper)] text-[var(--sr-ink)]">
+    <div className="sr-app-shell flex h-dvh flex-col bg-[var(--sr-paper)] text-[var(--sr-ink)]">
       {/* Header */}
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--sr-line)] bg-[var(--sr-paper)]/95 px-3 py-2.5 sm:px-6">
-        <div className="flex min-w-0 items-center gap-2.5">
+      <header className="sr-floating-nav relative flex flex-wrap items-center justify-between gap-3 px-3 py-2.5 sm:px-6">
+        <div className="flex w-full min-w-0 items-center justify-between gap-3 lg:w-auto">
+          <div className="flex min-w-0 items-center gap-2.5">
           <span
             aria-hidden="true"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--sr-pine)] text-white"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--sr-pine)] text-white shadow-[var(--sr-shadow-soft)]"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 20h20" />
@@ -563,11 +585,26 @@ export default function ChatWorkspace() {
               Your AI financial readiness agent for studying abroad
             </p>
           </div>
-        </div>
-        <nav aria-label="Main navigation" className="order-3 flex w-full items-center gap-1 border-t border-[var(--sr-line)] pt-2 sm:order-none sm:w-auto sm:border-0 sm:pt-0">
+          </div>
           <button
             type="button"
-            onClick={() => setActiveView("overview")}
+            className="inline-flex items-center justify-center border border-[var(--sr-line)] bg-white/70 p-2 text-[var(--sr-pine)] lg:hidden"
+            aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="primary-navigation-panel"
+            onClick={() => setMobileMenuOpen((open) => !open)}
+          >
+            {mobileMenuOpen ? <X size={20} aria-hidden="true" /> : <MenuIcon size={20} aria-hidden="true" />}
+          </button>
+        </div>
+        <div
+          id="primary-navigation-panel"
+          className={`sr-mobile-nav ${mobileMenuOpen ? "flex" : "hidden"} absolute inset-x-0 top-[calc(100%+0.5rem)] flex-col gap-3 p-4 lg:static lg:flex lg:flex-row lg:items-center lg:gap-4 lg:p-0`}
+        >
+        <nav aria-label="Main navigation" className="flex flex-wrap items-center gap-1 border-b border-[var(--sr-line)] pb-2 lg:border-0 lg:pb-0">
+          <button
+            type="button"
+            onClick={() => { setActiveView("overview"); setMobileMenuOpen(false); }}
             aria-pressed={activeView === "overview"}
             className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] ${activeView === "overview" ? "bg-[var(--sr-pine)]/10 text-[var(--sr-pine)]" : "text-[var(--sr-ink)]/60 hover:bg-[var(--sr-mist)]/70"}`}
           >
@@ -576,7 +613,7 @@ export default function ChatWorkspace() {
           </button>
           <button
             type="button"
-            onClick={() => setActiveView("chat")}
+            onClick={() => { setActiveView("chat"); setMobileMenuOpen(false); }}
             aria-pressed={activeView === "chat"}
             className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] ${activeView === "chat" ? "bg-[var(--sr-pine)]/10 text-[var(--sr-pine)]" : "text-[var(--sr-ink)]/60 hover:bg-[var(--sr-mist)]/70"}`}
           >
@@ -584,7 +621,7 @@ export default function ChatWorkspace() {
             Chat
           </button>
         </nav>
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 lg:ml-auto lg:shrink-0">
           <ReminderCenter />
           {providerBadge}
           <button
@@ -595,6 +632,7 @@ export default function ChatWorkspace() {
           >
             New conversation
           </button>
+          <SignOutButton />
           <button
             type="button"
             onClick={deleteData}
@@ -604,6 +642,7 @@ export default function ChatWorkspace() {
           >
             Delete my data
           </button>
+        </div>
         </div>
       </header>
 
@@ -726,6 +765,7 @@ function Intro({
       </p>
       <button
         type="button"
+        data-shape="card"
         onClick={() => onExample(SAMPLE_BUDGET_MESSAGE)}
         disabled={disabled}
         className="mt-5 w-full rounded-2xl bg-[var(--sr-pine)] px-4 py-3.5 text-left shadow-[0_2px_8px_rgba(31,42,38,0.15)] transition hover:bg-[var(--sr-pine)]/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-wait disabled:opacity-60"
@@ -739,6 +779,7 @@ function Intro({
       </button>
       <button
         type="button"
+        data-shape="card"
         onClick={() => onExample(SAMPLE_SAFE_TO_SEND_MESSAGE)}
         disabled={disabled}
         className="mt-3 w-full rounded-2xl border border-[var(--sr-line)] bg-white/90 px-4 py-3.5 text-left shadow-[0_1px_2px_rgba(31,42,38,0.08)] transition hover:border-[var(--sr-pine)]/60 hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--sr-pine)] disabled:cursor-wait disabled:opacity-60"

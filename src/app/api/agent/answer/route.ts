@@ -8,7 +8,11 @@
  * For approval gates, `answers` should be { decision: "approve" | "deny" }.
  */
 import { submitAnswers } from "@/lib/agent/orchestrator";
+import { writeAuditEvent } from "@/lib/agent/audit";
+import { getTask } from "@/lib/agent/state";
 import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
+import { requireApiUser, scopeSessionId } from "@/lib/auth/requireUser";
+import { withPersistentSession } from "@/lib/agent/firestoreSessionStore";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,6 +20,8 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 64 * 1024;
 
 export async function POST(req: Request): Promise<Response> {
+  const user = await requireApiUser();
+  if (user instanceof Response) return user;
   const persistenceError = sessionPersistenceResponse();
   if (persistenceError) return Response.json({ ok: false, ...(await persistenceError.json()) }, { status: 503 });
   const originError = requestOriginError(req);
@@ -40,17 +46,43 @@ export async function POST(req: Request): Promise<Response> {
   if (sidErr) {
     return Response.json({ ok: false, error: sidErr }, { status: 400 });
   }
-  const sessionId = body.sessionId as string;
-  const questionId = typeof body.questionId === "string" ? body.questionId : "";
-  if (!questionId) {
-    return Response.json(
-      { ok: false, error: "sessionId and questionId are required" },
-      { status: 400 }
-    );
-  }
-  const result = submitAnswers(sessionId, questionId, body.answers);
-  if (!result.ok) {
-    return Response.json(result, { status: 404 });
-  }
-  return Response.json(result);
+  const sessionId = scopeSessionId(user.id, body.sessionId as string);
+  return withPersistentSession(sessionId, async () => {
+    const questionId = typeof body.questionId === "string" ? body.questionId : "";
+    if (!questionId) {
+      return Response.json(
+        { ok: false, error: "sessionId and questionId are required" },
+        { status: 400 }
+      );
+    }
+    const previous = getTask(sessionId);
+    const approval = previous?.pendingApproval?.id === questionId ? previous.pendingApproval : null;
+    const question = previous?.pendingQuestions.find((item) => item.id === questionId);
+    const result = submitAnswers(sessionId, questionId, body.answers);
+    if (!result.ok) {
+      return Response.json(result, { status: 404 });
+    }
+    if (previous && approval) {
+      const rawDecision = body.answers && typeof body.answers === "object"
+        ? (body.answers as Record<string, unknown>).decision
+        : undefined;
+      await writeAuditEvent({
+        type: "agent.approval.decided",
+        taskId: previous.taskId,
+        tool: approval.tool,
+        decision: String(rawDecision ?? "").toLowerCase() === "approve" ? "approved" : "denied",
+      });
+    } else if (previous && question) {
+      const answerFieldCount = body.answers && typeof body.answers === "object"
+        ? Math.min(Object.keys(body.answers).length, 10)
+        : typeof body.answers === "string" ? 1 : 0;
+      await writeAuditEvent({
+        type: "agent.answer.submitted",
+        taskId: previous.taskId,
+        questionKind: question.kind,
+        answerFieldCount,
+      });
+    }
+    return Response.json(result);
+  });
 }

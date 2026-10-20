@@ -17,16 +17,22 @@ npm run build     # production build
 npm start         # serve the production build
 ```
 
-## Environment variables (all optional)
+## Environment variables
 
 Copy `.env.example` to `.env.local` and fill in **server-side only** values.
-Never commit `.env.local`; never put these in client code.
+Never commit `.env.local`; never put these in client code. Google sign-in is
+required to open the app; AI provider credentials remain optional for the
+labelled demo engine.
 
 | Variable | Purpose |
 |---|---|
+| `AUTH_SECRET` | Random server-only secret used to encrypt Google login sessions and bind server-side financial sessions to a signed-in user. Use a unique value per environment. |
+| `AUTH_GOOGLE_ID` | Google OAuth Web application client ID. |
+| `AUTH_GOOGLE_SECRET` | Google OAuth Web application client secret. Keep it server-side and store it in Secret Manager on Cloud Run. |
+| `AUTH_URL` | Optional Auth.js base URL. Set it to `https://YOUR-CLOUD-RUN-HOST/api/auth` on Cloud Run when the proxy does not forward the public host correctly; leave it unset for local development. |
 | `AI_PROVIDER` | Optional explicit provider selection: `demo`, `vertex`, `gemini`, `xai`, `openai`, or `anthropic`. This prevents a leftover key for another provider from taking precedence. |
 | `AI_BACKEND` | Optional backend selector; `vertex-adc` selects Vertex AI with ADC and takes precedence over `AI_PROVIDER`. |
-| `AUTH_MODE` | Vertex authentication mode. This integration supports `ADC`. |
+| `AUTH_MODE` | Vertex authentication mode. This integration supports `ADC`; it is separate from website Google sign-in. |
 | `VERTEX_AI_PROJECT` | Google Cloud project ID for Vertex AI. `VERTEX_AI_PROJECT_ID` and `GOOGLE_CLOUD_PROJECT` are accepted as fallbacks. |
 | `VERTEX_AI_LOCATION` | Vertex AI location; defaults to `global`. `GOOGLE_CLOUD_LOCATION` is accepted as a fallback. |
 | `VERTEX_AI_MODEL` | Vertex-hosted Gemini model; defaults to `google/gemini-3.5-flash`. Set a model enabled for your project. |
@@ -38,8 +44,9 @@ Never commit `.env.local`; never put these in client code.
 | `XAI_API_KEY`, `XAI_BASE_URL`, `XAI_MODEL` | Optional xAI/Grok provider. |
 | `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` | Optional OpenAI or OpenAI-compatible provider. `OPENAI_BASE_URL` now honours the environment variable. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Optional Anthropic/Claude provider. |
-| `STUDYRUNWAY_SESSION_STORE` | Session-store selector. `memory` is for local/dev only; production requires a supported shared adapter. The current build does not bundle a Firestore adapter and fails closed when production persistence is unavailable. |
+| `STUDYRUNWAY_SESSION_STORE` | Session-store selector. Use `firestore` on Cloud Run for durable server-side agent task state; `memory` is for local development only. |
 | `STUDYRUNWAY_DEMO_MODE` | Set `true` only for an explicitly labelled demo deployment that accepts process-local in-memory sessions. It is not a durability or identity guarantee. |
+| `STUDYRUNWAY_AUDIT_STORE` | `stdout` (default) emits privacy-limited JSON locally. Set `cloud-logging` on Google Cloud to write audit entries directly to Cloud Logging using ADC; the runtime identity needs `roles/logging.logWriter`. Failed writes fall back to structured stdout and are not silently discarded. |
 | `WISE_QUOTES_ENABLED` | Set `true` only after confirming Wise Platform permits the app to show unauthenticated quote previews. Defaults to off. This adds indicative quotes only and never initiates a transfer. |
 | `WISE_QUOTES_ENV` | `production` for current indicative quotes or `sandbox` for non-live test quotes. Defaults to production, but the Wise quote endpoint remains disabled until the flag is enabled. |
 
@@ -53,6 +60,36 @@ If `AI_PROVIDER` is set to a valid provider, StudyRunway uses only that provider
 4. Restart `npm run dev`. The header should display `Google Vertex AI · <model>` when the provider is configured.
 
 This uses the standard project-scoped Vertex AI OpenAI-compatible endpoint and Google Cloud Application Default Credentials. It does **not** use an AI Studio API key. Google documents the endpoint and authentication in [Vertex AI's OpenAI compatibility guide](https://cloud.google.com/vertex-ai/generative-ai/docs/start/openai). Keep credentials out of chat and source control.
+
+### Google website sign-in
+
+1. In Google Cloud Console, select the project and configure the OAuth consent
+   screen. Create an OAuth client ID with application type **Web application**.
+2. Add these authorized redirect URIs to that OAuth client:
+   `http://localhost:3000/api/auth/callback/google` for local development and
+   `https://studyrunway-agent-dnwlfigpsa-el.a.run.app/api/auth/callback/google`
+   for the deployed site. This is the public host currently used for Google
+   OAuth. If you change to the other Cloud Run hostname or a custom domain,
+   register its exact callback URI and update `AUTH_URL` too.
+3. Copy the OAuth client ID and secret into `AUTH_GOOGLE_ID` and
+   `AUTH_GOOGLE_SECRET` in `.env.local`. Generate a separate random
+   `AUTH_SECRET` (for example, with Node's `crypto.randomBytes(32)`) and store
+   it only in the server environment.
+4. Restart the local server. The app shows the Google sign-in page until these
+   three settings are present. Cloud Run uses Secret Manager-backed credentials
+   and sets `AUTH_URL=https://studyrunway-agent-dnwlfigpsa-el.a.run.app/api/auth`
+   so OAuth callbacks use the public HTTPS host instead of the container's
+   internal address.
+
+The login uses Google's OpenID Connect identity and accepts only accounts
+whose Google profile marks the email as verified. It requests no access to
+Drive, Gmail, or other Google services. Every agent, funding, budget, quote,
+and Safe-to-Send API route requires a valid signed-in session. Server task IDs
+are derived from the Google account identity, so browser-provided session IDs
+cannot cross account boundaries. On Cloud Run, the Firestore adapter persists
+server-side agent task state separately from Vertex AI's ADC permissions.
+
+For Cloud Run, set `STUDYRUNWAY_AUDIT_STORE=cloud-logging` and grant the runtime service account `roles/logging.logWriter`. Audit records are sent to the `studyrunway-audit` log, routed by Cloud Logging's project sinks and bucket retention policy. The default `_Default` bucket retains entries for 30 days; adjust retention or configure a restricted export if the project requires a longer audit history. Records exclude prompts, answers, amounts, documents, session IDs, and tool payloads.
 
 Official policy research uses Vertex's native `generateContent` endpoint with Google Search grounding, separate from the OpenAI-compatible chat endpoint. Enable Vertex AI API/billing and Google Search suggestions for the project. Set `VERTEX_AI_RESEARCH_MODEL` to a Gemini model that supports Search grounding. Research needs a destination country; tuition, instalment, and scholarship lookups also need the university or awarding body. Returned claims include direct source pages and a checked-at timestamp. A result is withheld unless every returned source passes the app's official-domain check (`.gov`, recognized `.edu`/`.ac` domains, or a domain you provide). Google Search suggestions are displayed as returned by Vertex. Grounded Search has separate [Google Search grounding](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search) and [Search suggestion display requirements](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-search-suggestions).
 
@@ -122,8 +159,9 @@ real thing: configure one provider in `.env.local` (for Vertex AI, set the proje
    budget"), then send any follow-up — the paused demo resumes and runs
    the engine.
 
-No provider key, no network calls, and no account are needed for any of
-the above.
+No AI provider key is needed for the deterministic demo engine. Google
+sign-in must be configured before the app can be used; once signed in, the
+sample budget workflow itself makes no AI provider call.
 
 ### Structured funding details
 
@@ -143,10 +181,10 @@ configured hosted Google Gemini/Vertex-Gemini provider for an explanation only.
 Provider failure leaves the deterministic result visible and enables retry;
 the AI response cannot modify calculations or trigger protected actions.
 
-If you restart the server, its in-memory task state is reset. The client now
-checks whether a restored transcript still has a live server-side session and
-starts fresh with a clear notice when that state has expired, instead of leaving
-clarification or approval buttons that can only return `unknown session`.
+With the default local `memory` store, restarting the server resets its
+process-local task state. The client checks whether a restored transcript still
+has a live server-side session and starts fresh with a clear notice when that
+state has expired. Cloud Run should use the Firestore store described below.
 
 ### Cloud Run session continuity
 
@@ -155,14 +193,22 @@ confirmed facts, approvals, Safe-to-Send decisions, simulation receipts, and
 duplicate-prevention records must be stored in a shared transactional store
 before this application can safely serve stateful production workflows.
 
-This repository exposes a typed local `TaskStore` interface and fails
-stateful production routes with HTTP 503 unless a shared adapter is installed.
-It does not claim Firestore persistence yet. A production rollout must install
-and review a Firestore (or equivalent transactional store) adapter, grant the
-Cloud Run service identity least-privilege access, set
-`STUDYRUNWAY_SESSION_STORE` to that adapter, and add restart/concurrency tests
-before enabling it. Set `STUDYRUNWAY_DEMO_MODE=true` only when the deployment
-is intentionally demo-only and can tolerate instance-local state.
+The Firestore REST adapter is included and configured on the production Cloud
+Run service. It uses the Firestore Native database in the same Google Cloud
+project. The runtime identity has `roles/datastore.user` only on the default
+database, through a conditional IAM binding; do not grant this role project-wide.
+The service uses ADC with `FIRESTORE_PROJECT_ID` and
+`STUDYRUNWAY_SESSION_STORE=firestore`, with `STUDYRUNWAY_DEMO_MODE=false`.
+Every restored task is validated and keyed using an HMAC of the authenticated
+user identity and session ID. Records carry a 180-day expiry, and Firestore
+update-time preconditions detect concurrent writes rather than silently
+overwriting state. Stateful routes fail closed if Firestore is unavailable.
+
+Chat transcripts, reminders, budgets, and other browser-only preferences still
+use account-namespaced localStorage on that device. They are not synced across
+devices or backed up to Firestore. The server-side task state is stored in
+Firestore; audit events are written to Cloud Logging with the retention and
+access controls configured for the project.
 
 ## Test commands
 

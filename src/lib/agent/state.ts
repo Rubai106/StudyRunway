@@ -250,7 +250,15 @@ export function sessionPersistenceError(): string | null {
   const demoOnly = (process.env.STUDYRUNWAY_DEMO_MODE ?? "").trim().toLowerCase() === "true";
   if (configured === "memory" && (process.env.NODE_ENV !== "production" || demoOnly)) return null;
   if (configured === "firestore") {
-    return "Durable session storage is selected but no Firestore adapter is installed. Configure the shared store integration before serving production sessions.";
+    const projectId = [
+      process.env.FIRESTORE_PROJECT_ID,
+      process.env.GOOGLE_CLOUD_PROJECT,
+      process.env.GCLOUD_PROJECT,
+      process.env.VERTEX_AI_PROJECT,
+    ].map((value) => value?.trim()).find(Boolean);
+    return projectId && /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)
+      ? null
+      : "FIRESTORE_PROJECT_ID must name the Google Cloud project for durable sessions.";
   }
   return "Durable session storage is not configured. Set STUDYRUNWAY_SESSION_STORE to a supported shared store, or explicitly set STUDYRUNWAY_DEMO_MODE=true for demo-only in-memory sessions.";
 }
@@ -290,6 +298,13 @@ export function getTask(sessionId: string): TaskState | undefined {
   const raw = store.get(sessionId);
   if (!raw) return undefined;
   return TaskStateSchema.parse(raw);
+}
+
+/** Replace a task from a trusted durable-store read after schema validation. */
+export function restoreTask(raw: unknown): TaskState {
+  const state = TaskStateSchema.parse(raw);
+  store.set(state.sessionId, state);
+  return state;
 }
 
 /** Merge a partial update into a task (validated). */

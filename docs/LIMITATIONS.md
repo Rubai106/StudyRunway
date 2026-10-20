@@ -85,16 +85,14 @@ Honest boundaries, so nobody mistakes the demo for more than it is.
 
 - **In-memory server sessions.** Task state lives in a process-local Map:
   restarting the server loses it and it is not shared between instances.
-  There is no database, no login, and no cross-device sync. Session IDs are
-  generated with browser `crypto.randomUUID()` where available and validated,
-  but they are still client-supplied bearer identifiers rather than authenticated
-  ownership. A party who learns a valid session ID may be able to access its
-  state. Origin checks mitigate browser CSRF but do not replace authentication.
-  Do not deploy this demo for real sensitive financial records without adding
-  proper authentication and per-session ownership controls.
+  Google OAuth sign-in and server-side route checks are implemented, and
+  internal task keys are scoped to the authenticated Google identity. OAuth
+  credentials must be configured before sign-in is available. The app still
+  has no database or cross-device sync, so task state disappears on restart.
 - **Client transcripts and reminders in localStorage only** (`studyrunway.*`
-  keys). Clearing browser data or switching devices loses them. "Delete my
-  data" wipes the app's keys on that device only.
+  keys, namespaced by an opaque hash of the signed-in account). They are not
+  encrypted or synced. Clearing browser data or switching devices loses them.
+  "Delete my data" wipes the active account's StudyRunway keys on that device.
 
 ## Engine & documents
 
@@ -131,10 +129,13 @@ Honest boundaries, so nobody mistakes the demo for more than it is.
 
 ## Not production-ready
 
-No auth, demo-grade (in-memory, per-IP) rate limiting only on the chat route,
-and no durable audit store. The server emits privacy-limited JSON audit events
-to stdout; production retention and access controls require a configured log
-sink such as Cloud Logging. There is no accessibility audit beyond
+Google OAuth requires environment configuration; rate limiting is demo-grade
+(in-memory, per-IP) and only on selected routes, and there is no durable
+student-session store. Privacy-limited audit events can be
+written directly to Cloud Logging when `STUDYRUNWAY_AUDIT_STORE=cloud-logging`
+and the runtime service account has `roles/logging.logWriter`; storage
+retention and access controls follow the Google Cloud project configuration.
+There is no accessibility audit beyond
 keyboard/reduced-motion E2E coverage, and the residual risks listed in
 `SECURITY_SELF_ASSESSMENT.md` §11 still apply.
 Built for the FinTechathon demo and judging criteria — harden before any

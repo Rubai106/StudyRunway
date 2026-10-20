@@ -2,12 +2,15 @@ import { FundingFormRequestSchema } from "@/lib/fundingForm";
 import { formatFundingAnalysis, generateFundingAnalysis } from "@/lib/fundingAnalysis";
 import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
 import { checkRateLimit, requestClientKey, FUNDING_ANALYSIS_RATE_MAX_REQUESTS, RATE_WINDOW_MS } from "@/lib/agent/rateLimit";
+import { requireApiUser } from "@/lib/auth/requireUser";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 const MAX_BODY_BYTES = 256 * 1024;
 
 export async function POST(req: Request): Promise<Response> {
+  const user = await requireApiUser();
+  if (user instanceof Response) return user;
   const persistenceError = sessionPersistenceResponse();
   if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);

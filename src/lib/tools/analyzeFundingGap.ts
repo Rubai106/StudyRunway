@@ -203,6 +203,39 @@ function sentenceAround(text: string, start: number, end: number): { text: strin
 }
 
 /**
+ * Keep qualifiers attached to the amount they describe when a user lists
+ * multiple records in one sentence (for example, “scholarship expected in
+ * three weeks, and wages due next week”). Commas inside numeric amounts are
+ * not clause boundaries.
+ */
+function financialClauseAround(text: string, start: number, end: number): { text: string; offset: number } {
+  const sentence = sentenceAround(text, start, end);
+  const localStart = sentence.offset;
+  const localEnd = localStart + (end - start);
+  const isDelimiter = (index: number) => {
+    if (sentence.text[index] !== ",") return false;
+    const previous = sentence.text[index - 1] ?? "";
+    const next = sentence.text[index + 1] ?? "";
+    return !(/\d/.test(previous) && /\d/.test(next));
+  };
+  let left = 0;
+  for (let i = localStart - 1; i >= 0; i -= 1) {
+    if (isDelimiter(i)) {
+      left = i + 1;
+      break;
+    }
+  }
+  let right = sentence.text.length;
+  for (let i = localEnd; i < sentence.text.length; i += 1) {
+    if (isDelimiter(i)) {
+      right = i;
+      break;
+    }
+  }
+  return { text: sentence.text.slice(left, right), offset: localStart - left };
+}
+
+/**
  * Recover the simple amounts/dates directly from the user's text. When this
  * strict parser can account for each explicit currency amount, use that data
  * instead of model-generated tool arguments, which may contain a plausible
@@ -230,12 +263,12 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
     // Restrict status/kind/date association to the sentence with this amount.
     // A sliding window let a nearby scholarship or bill change the status of
     // unrelated savings (and vice versa).
-    const sentence = sentenceAround(text, mention.start, mention.end);
-    const nearby = sentence.text;
+    const clause = financialClauseAround(text, mention.start, mention.end);
+    const nearby = clause.text;
     // A hypothetical or proposed alternative is not part of the baseline
     // forecast. Refuse the full text rather than silently count it as cash.
     if (/\b(?:hypothetical|proposed|backup option|recovery option)\b/i.test(nearby)) return null;
-    const localOffset = sentence.offset;
+    const localOffset = clause.offset;
     const fundingDistance = nearestTermDistance(nearby, FUNDING_TERMS, localOffset);
     const obligationDistance = nearestTermDistance(nearby, OBLIGATION_TERMS, localOffset);
     if (fundingDistance == null && obligationDistance == null) return null;
@@ -243,9 +276,12 @@ export function extractFundingGapInputFromText(text: string): AnalyzeFundingGapI
     if (fundingDistance != null && (obligationDistance == null || fundingDistance < obligationDistance)) {
       const status: NonNullable<AnalyzeFundingGapInput["fundingSources"][number]["status"]> | undefined =
         /\bconditional\b/i.test(nearby) ? "conditional"
-          : /\bestimated?\b/i.test(nearby) ? "estimated"
-            : /\bunverified\b/i.test(nearby) ? "unverified"
-              : /\b(expected|approved|confirmed pending|will receive|will arrive)\b/i.test(nearby) ||
+          : /\bunverified\b/i.test(nearby) ? "unverified"
+            // Expected describes a forecast, not a confirmed award or
+            // payment. Uncertainty takes precedence even if the sentence also
+            // says “approved” or “will arrive”.
+            : /\b(?:estimated?|expected|expect(?:ing)?|likely|possibly|maybe|might|may|could|should|hoping|uncertain|not\s+sure|not\s+confirmed|pending\s+approval)\b/i.test(nearby) ? "estimated"
+              : /\b(?:confirmed\s+(?:and\s+)?(?:pending|scheduled|for release|to arrive|to be disbursed)|approved\s+(?:and\s+)?(?:scheduled|pending disbursement|for release)|awarded\s+(?:and\s+)?(?:scheduled|pending disbursement|for release)|will\s+(?:receive|arrive|be paid|be disbursed))\b/i.test(nearby) ||
                 (/\b(due|payday)\b/i.test(nearby) && /\b(?:wages?|paychecks?|pay\s+cheques?|salar(?:y|ies)|work\s+pay)\b/i.test(nearby)) ? "confirmed_pending"
                 : /\b(available|in hand|currently have|\bhave\b|received)\b/i.test(nearby) ? "confirmed_available"
                   : undefined;
@@ -427,7 +463,9 @@ export const analyzeFundingGapTool: ToolDefinition = {
     "Use only amounts, dates, currencies, and funding status explicitly stated by the user or present in the " +
     "structured plan. Use ISO dates. For confirmed_available money with no explicit date, omit availableDate " +
     "so the engine treats it as available as of asOfDate. Include fxRates only when the user or structured plan " +
-    "provided an exchange rate; never estimate one. If required data is missing, ask instead of guessing.",
+    "provided an exchange rate; never estimate one. Treat expected, likely, conditional, or unverified funds as " +
+    "uncertain unless the user explicitly confirms the award and its payment schedule. Never promote expected " +
+    "scholarships or wages to confirmed_pending. If required data is missing, ask instead of guessing.",
   parameters: AnalyzeFundingGapParams,
   requiresApproval: false,
   safeToReplayForVerification: true,

@@ -5,7 +5,25 @@ compliance at 30% — this document is the honest self-assessment.
 
 Scope: the rebuilt agent at `studyrunway-agent/` (Next.js 15.5.28, React 19).
 Evaluated 2026-10-15 by the evaluation workstream. "Residual risks" at the
-bottom are the ones we knowingly ship with.
+bottom are the ones we knowingly ship with. The assessment below is a historical
+snapshot; the 2026-10-20 authentication update supersedes its earlier statements
+that the app had no login.
+
+## Current authentication update — 2026-10-20
+
+- Google OAuth is integrated through Auth.js. The root app and all agent,
+  funding, budget, quote, and Safe-to-Send API routes require a valid session.
+- Sign-in accepts only Google profiles that explicitly mark the email as
+  verified. Only OpenID Connect identity scopes are requested.
+- Server task keys use an HMAC of the authenticated Google subject and the
+  client session ID; browser-controlled IDs cannot cross account boundaries.
+- Browser-local financial data is stored under a non-reversible hash-derived
+  account namespace to prevent another signed-in account in the same browser
+  from loading it. It remains local and is not encrypted or synchronized.
+- Production Google OAuth credentials are stored in Secret Manager and
+  injected into Cloud Run. The OAuth redirect URI must also be registered on
+  the Google OAuth web client. The Cloud Run task store uses Firestore with
+  database-scoped runtime IAM; local development defaults to process memory.
 
 ## 1. Tool allow-listing
 
@@ -106,15 +124,22 @@ bottom are the ones we knowingly ship with.
 
 ## 8. Data retention & deletion
 
-- Server task state is in-memory only (process-local `Map`); it is lost on
-  restart and never leaves the server.
-- Server-side agent audit events are emitted as privacy-limited JSON lines to
-  stdout. They record task lifecycle, clarification kind/count, approval
-  outcome, tool name/outcome/duration, and task deletion. They omit prompts,
-  answers, documents, session IDs, tool arguments/results, and credentials.
-  Cloud Logging can ingest these on Google Cloud, but durable retention,
-  access controls, and tamper-evident exports are deployment configuration;
-  local stdout is not a durable audit store.
+- On Cloud Run, server task state is stored in Firestore under a key derived
+  from the authenticated user and session ID, with 180-day expiry metadata and
+  update-time preconditions. Local development uses process memory. Browser
+  transcripts, reminders, budgets, and preferences remain device-local and are
+  not synced to the server.
+- Server-side agent audit events can be written directly to the
+  `studyrunway-audit` Cloud Logging log with
+  `STUDYRUNWAY_AUDIT_STORE=cloud-logging`. They record task lifecycle,
+  clarification kind/count, approval outcome, tool outcome, plan changes,
+  safe-action outcomes, and task deletion. They omit prompts, answer values,
+  amounts, documents, session IDs, tool arguments/results, and credentials.
+  The Cloud Run runtime service account needs `roles/logging.logWriter`.
+  Failed API writes fall back to structured stdout and carry a fallback marker.
+  Retention and access controls follow the Cloud Logging bucket/project
+  configuration; the default `_Default` bucket retains entries for 30 days.
+  Local stdout is not a durable audit store.
 - Client transcripts live in `localStorage` under the `studyrunway.*` prefix.
   "Delete my data" wipes every key with that prefix after a confirm dialog and
   starts a fresh session (E2E-tested: keys gone, transcript cleared). Reminders
@@ -267,21 +292,20 @@ bottom are the ones we knowingly ship with.
   rejection event and blocked workflow stage — that is intentional
   rejection evidence, not a successful application.
 
-## 13. Demo protections vs production requirements (2026-10-19)
+## 13. Current controls and remaining production requirements (2026-10-20)
 
-The controls in §§1–10, 12 are **demo-grade** and are sufficient for a
-controlled competition demo with a cooperative user. They are **not**
-production controls. Before any real-user launch, the following are required
-and are currently absent:
+Authentication and durable server task storage are now configured for the
+Cloud Run deployment. Remaining controls below still need attention before a
+broader real-user launch:
 
-| Demo protection (present) | Production requirement (absent) |
+| Current control | Remaining requirement or limitation |
 |---|---|
-| Fixed client-visible ack strings (§12) | Authenticated sessions; per-user ownership of state; signed or server-issued approval tokens bound to the exact transaction |
-| Client-supplied UUID session IDs + origin check | Real authentication; server-side session binding to an authenticated principal |
+| Google OAuth sessions; server task IDs scoped to authenticated identity | Signed or server-issued approval tokens bound to an exact transaction for any future consequential external action |
+| Firestore task persistence with database-scoped IAM and concurrent-write checks | Review Firestore IAM, backup, retention, and access monitoring as the user base grows |
 | In-memory per-process rate-limit buckets | Distributed rate limiting (Redis or gateway-level) |
-| In-memory task state (lost on restart) | Durable, access-controlled per-user storage |
-| Stdout JSON audit lines | Tamper-evident, retained audit store with access controls |
+| Privacy-limited Cloud Logging audit events with stdout fallback | Tamper-evident/immutable export and retention beyond the project's current default; stdout fallback is not a durable guarantee |
 | Pattern-based document-injection screening | Semantic/additional-layer injection defenses for untrusted content |
+| Browser data is namespaced by signed-in account | Cross-device synchronization and server backup for transcripts, reminders, and budgets are not implemented |
 
 ## 14. Dependency audit status — Windows verification (2026-10-19)
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { z } from "zod";
+import { getUserStorageKey } from "./userStorage";
 
 export const REMINDERS_KEY = "studyrunway.reminders";
 export const REMINDERS_CHANGE_EVENT = "studyrunway:reminders-changed";
@@ -25,7 +26,7 @@ function notifyChanged(): void {
 export function loadReminders(): Reminder[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(REMINDERS_KEY);
+    const raw = window.localStorage.getItem(getUserStorageKey(REMINDERS_KEY));
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -54,14 +55,14 @@ export function createReminder(title: string, remindAt: string): Reminder {
     notifiedAt: null,
   });
   const reminders = [...loadReminders(), parsed];
-  window.localStorage.setItem(REMINDERS_KEY, JSON.stringify(reminders));
+  window.localStorage.setItem(getUserStorageKey(REMINDERS_KEY), JSON.stringify(reminders));
   notifyChanged();
   return parsed;
 }
 
 export function deleteReminder(id: string): void {
   const next = loadReminders().filter((reminder) => reminder.id !== id);
-  window.localStorage.setItem(REMINDERS_KEY, JSON.stringify(next));
+  window.localStorage.setItem(getUserStorageKey(REMINDERS_KEY), JSON.stringify(next));
   notifyChanged();
 }
 
@@ -91,7 +92,7 @@ export function notifyDueReminders(): number {
           ? { ...item, notifiedAt: new Date().toISOString() }
           : item,
       );
-      window.localStorage.setItem(REMINDERS_KEY, JSON.stringify(next));
+      window.localStorage.setItem(getUserStorageKey(REMINDERS_KEY), JSON.stringify(next));
       sent += 1;
     } catch {
       // Leave it due in the list if the browser rejected this notification.

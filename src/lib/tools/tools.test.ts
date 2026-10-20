@@ -135,7 +135,7 @@ describe("analyze_funding_gap", () => {
     expect(input?.planningCurrency).toBe("USD");
     expect(input?.fundingSources).toEqual([
       expect.objectContaining({ amount: 500, currency: "USD", status: "confirmed_available" }),
-      expect.objectContaining({ amount: 800, currency: "USD", status: "confirmed_pending", expectedDate: "2026-11-05" }),
+      expect.objectContaining({ amount: 800, currency: "USD", status: "estimated", expectedDate: "2026-11-05" }),
     ]);
     expect(input?.obligations).toEqual([
       expect.objectContaining({ amount: 1200, currency: "USD", dueDate: "2026-11-30", kind: "tuition" }),
@@ -162,7 +162,7 @@ describe("analyze_funding_gap", () => {
       planningCurrency: "EUR",
       fundingSources: [
         { amount: 3200, currency: "EUR", status: "confirmed_available" },
-        { amount: 1000, currency: "EUR", status: "confirmed_pending", expectedDate: "2026-11-08", kind: "scholarship" },
+        { amount: 1000, currency: "EUR", status: "estimated", expectedDate: "2026-11-08", kind: "scholarship" },
         { amount: 700, currency: "EUR", status: "confirmed_pending", expectedDate: "2026-10-25", kind: "income" },
       ],
       obligations: [
@@ -178,6 +178,77 @@ describe("analyze_funding_gap", () => {
       gapDate: "2026-10-28",
       shortfallMinor: 110_000,
     });
+  });
+
+  it("treats a scholarship that should arrive after the deadline as uncertain funding", async () => {
+    const input = extractFundingGapInputFromText(
+      "As of 2026-10-18. I have USD 1,500 available. My USD 1,000 scholarship should arrive in 3 weeks. " +
+      "Tuition of USD 2,400 is due in 12 days.",
+    );
+
+    expect(input).not.toBeNull();
+    if (!input) throw new Error("Expected complete tuition timing facts to parse");
+    expect(input).toMatchObject({
+      asOfDate: "2026-10-18",
+      fundingSources: [
+        { amount: 1500, currency: "USD", status: "confirmed_available" },
+        { amount: 1000, currency: "USD", status: "estimated", expectedDate: "2026-11-08", kind: "scholarship" },
+      ],
+      obligations: [
+        { amount: 2400, currency: "USD", dueDate: "2026-10-30", status: "committed", kind: "tuition" },
+      ],
+    });
+
+    const result = await analyzeFundingGapTool.handler(input, CTX);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ hasGap: true, gapDate: "2026-10-30", shortfallMinor: 90_000 });
+  });
+
+  it("keeps an expected scholarship uncertain and shows the confirmed-only shortfall", async () => {
+    const input = extractFundingGapInputFromText(
+      "As of 2026-10-20. Tuition of USD 1,000 is committed and due in 30 days. " +
+      "I have USD 500 available now. A USD 500 scholarship is expected in 20 days.",
+    );
+
+    expect(input).not.toBeNull();
+    if (!input) throw new Error("Expected the tuition and scholarship details to parse");
+    expect(input.fundingSources).toContainEqual(expect.objectContaining({
+      amount: 500,
+      currency: "USD",
+      status: "estimated",
+      expectedDate: "2026-11-09",
+      kind: "scholarship",
+    }));
+
+    const result = await analyzeFundingGapTool.handler(input, CTX);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      hasGap: false,
+      confirmedOnly: {
+        hasGap: true,
+        gapDate: "2026-11-19",
+        shortfallMinor: 50_000,
+      },
+      fundingSplit: {
+        confirmedInflowMinor: 0,
+        uncertainInflowMinor: 50_000,
+      },
+    });
+  });
+
+  it("marks future scholarship as confirmed only when the user confirms its schedule", () => {
+    const input = extractFundingGapInputFromText(
+      "As of 2026-10-18. My USD 800 scholarship is confirmed and scheduled in 18 days. " +
+      "Tuition of USD 1,200 is committed and due in 30 days.",
+    );
+
+    expect(input?.fundingSources).toContainEqual(expect.objectContaining({
+      amount: 800,
+      currency: "USD",
+      status: "confirmed_pending",
+      expectedDate: "2026-11-05",
+      kind: "scholarship",
+    }));
   });
 
   it("builds a scenario baseline from dated facts while excluding explicitly listed recovery options", () => {

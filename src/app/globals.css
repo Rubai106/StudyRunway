@@ -9,13 +9,20 @@
  * fintech-neon palette — this is money plus stressed students.
  */
 :root {
-  --sr-paper: #f7f4ec;
-  --sr-ink: #1f2a26;
-  --sr-pine: #2e6b50;
-  --sr-amber: #b97a1f;
-  --sr-clay: #b0442e;
-  --sr-mist: #e9e2d2;
-  --sr-line: #ddd5c2;
+  --sr-paper: #fdfcf8;
+  --sr-ink: #2c2c24;
+  --sr-pine: #5d7052;
+  --sr-amber: #8a5d35;
+  --sr-clay: #a85448;
+  --sr-mist: #f0ebe5;
+  --sr-sand: #e6dccd;
+  --sr-line: #ded8cf;
+  --sr-display-font: "Fraunces Variable", Georgia, serif;
+  --sr-body-font: "Nunito Variable", "Nunito", ui-rounded, system-ui, sans-serif;
+  --sr-radius-organic: 2rem 2rem 2rem 1.4rem;
+  --sr-shadow-soft: 0 4px 20px -2px rgba(93, 112, 82, 0.15);
+  --sr-shadow-float: 0 10px 40px -10px rgba(193, 140, 93, 0.2);
+  --sr-shadow-hover: 0 20px 40px -10px rgba(93, 112, 82, 0.15);
 }
 
 html,
@@ -24,16 +31,118 @@ body {
 }
 
 body {
-  font-family:
-    "Inter",
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  position: relative;
+  font-family: var(--sr-body-font);
   background-color: var(--sr-paper);
+  background-image:
+    radial-gradient(ellipse at 12% 8%, rgba(193, 140, 93, 0.12), transparent 34%),
+    radial-gradient(ellipse at 88% 22%, rgba(93, 112, 82, 0.09), transparent 36%);
+  background-attachment: fixed;
   color: var(--sr-ink);
   -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  opacity: 0.035;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.45'/%3E%3C/svg%3E");
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--sr-display-font);
+  font-optical-sizing: auto;
+}
+
+.sr-app-shell {
+  background-image:
+    radial-gradient(ellipse at 8% 7%, rgba(193, 140, 93, 0.12), transparent 35%),
+    radial-gradient(ellipse at 92% 24%, rgba(93, 112, 82, 0.08), transparent 36%);
+}
+
+.sr-floating-nav {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 40;
+  width: calc(100% - 1.5rem);
+  max-width: 80rem;
+  margin: 0.75rem auto 0;
+  padding: 0.65rem 1rem;
+  border: 1px solid rgba(222, 216, 207, 0.75);
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: var(--sr-shadow-soft);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+@media (max-width: 1023px) {
+  .sr-mobile-nav {
+    border: 1px solid rgba(222, 216, 207, 0.8);
+    border-radius: 1.75rem;
+    background: rgba(253, 252, 248, 0.97);
+    box-shadow: var(--sr-shadow-float);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+  }
+}
+
+.sr-dashboard > div > section {
+  border-radius: var(--sr-radius-organic);
+  box-shadow: var(--sr-shadow-soft);
+  transition: box-shadow 400ms ease, transform 400ms ease;
+}
+
+.sr-dashboard > div > section:hover {
+  box-shadow: var(--sr-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.sr-dashboard li[class*="rounded-"][class*="border"] {
+  border-radius: 1.5rem 1.5rem 1.5rem 1rem;
+  background-color: rgba(254, 254, 250, 0.84);
+}
+
+button:not([data-shape="card"]) {
+  min-height: 44px;
+  border-radius: 9999px;
+  transition-duration: 350ms;
+  transition-timing-function: cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+button:not([data-shape="card"]):not(:disabled):hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: var(--sr-shadow-soft);
+}
+
+button:not([data-shape="card"]):not(:disabled):active {
+  transform: scale(0.98);
+}
+
+button[data-shape="card"] {
+  min-height: 4.5rem;
+  border-radius: 1.75rem 1.75rem 1.75rem 1.2rem;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+select {
+  min-height: 44px;
+  border-radius: 9999px;
+  border-color: var(--sr-line);
+  background-color: rgba(255, 255, 255, 0.72);
+}
+
+textarea {
+  border-radius: 1.5rem;
 }
 
 /* Typing / working indicator dots */
@@ -72,8 +181,8 @@ body {
 /* Visible focus everywhere — keyboard users must always see where they are */
 :focus-visible {
   outline: 2px solid var(--sr-pine);
-  outline-offset: 2px;
-  border-radius: 4px;
+  outline-offset: 3px;
+  border-radius: inherit;
 }
 
 /* Honor reduced motion: no dot bounce, no smooth-scroll jump */
@@ -88,6 +197,12 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .sr-dashboard > div > section:hover,
+  button:not([data-shape="card"]):not(:disabled):hover,
+  button:not([data-shape="card"]):not(:disabled):active {
+    transform: none;
   }
 }
 

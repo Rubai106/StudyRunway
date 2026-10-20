@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isSupportedCurrency } from "./currency";
 import { ISO_DATE } from "./model";
+import { getUserStorageKey } from "./userStorage";
 
 export const ARRIVAL_COSTS_KEY = "studyrunway.arrival-costs.v1";
 export const ARRIVAL_COSTS_CHANGE_EVENT = "studyrunway:arrival-costs-changed";
@@ -54,7 +55,7 @@ export function emptyArrivalCosts(): ArrivalCostState {
 export function loadArrivalCosts(): ArrivalCostState {
   if (typeof window === "undefined") return emptyArrivalCosts();
   try {
-    const raw = window.localStorage.getItem(ARRIVAL_COSTS_KEY);
+    const raw = window.localStorage.getItem(getUserStorageKey(ARRIVAL_COSTS_KEY));
     if (!raw) return emptyArrivalCosts();
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return emptyArrivalCosts();
@@ -75,7 +76,7 @@ export function saveArrivalCosts(value: ArrivalCostState): boolean {
   const parsed = StateSchema.safeParse(value);
   if (!parsed.success) return false;
   try {
-    window.localStorage.setItem(ARRIVAL_COSTS_KEY, JSON.stringify(parsed.data));
+    window.localStorage.setItem(getUserStorageKey(ARRIVAL_COSTS_KEY), JSON.stringify(parsed.data));
     window.dispatchEvent(new Event(ARRIVAL_COSTS_CHANGE_EVENT));
     return true;
   } catch {

@@ -27,11 +27,14 @@ beforeEach(() => {
 
 const originalSessionStore = process.env.STUDYRUNWAY_SESSION_STORE;
 const originalDemoMode = process.env.STUDYRUNWAY_DEMO_MODE;
+const originalFirestoreProjectId = process.env.FIRESTORE_PROJECT_ID;
 
 afterEach(() => {
   vi.unstubAllEnvs();
   process.env.STUDYRUNWAY_SESSION_STORE = originalSessionStore;
   process.env.STUDYRUNWAY_DEMO_MODE = originalDemoMode;
+  if (originalFirestoreProjectId === undefined) delete process.env.FIRESTORE_PROJECT_ID;
+  else process.env.FIRESTORE_PROJECT_ID = originalFirestoreProjectId;
 });
 
 describe("task state store", () => {
@@ -71,10 +74,13 @@ describe("task state store", () => {
     expect(sessionPersistenceError()).toBeNull();
   });
 
-  it("does not claim an unimplemented Firestore adapter is available", () => {
+  it("allows production Firestore storage when the project is configured", () => {
     vi.stubEnv("NODE_ENV", "production");
     process.env.STUDYRUNWAY_SESSION_STORE = "firestore";
-    expect(sessionPersistenceError()).toContain("no Firestore adapter is installed");
+    delete process.env.FIRESTORE_PROJECT_ID;
+    expect(sessionPersistenceError()).toContain("FIRESTORE_PROJECT_ID");
+    process.env.FIRESTORE_PROJECT_ID = "studyrunway-test-project";
+    expect(sessionPersistenceError()).toBeNull();
   });
 
   it("rejects invalid status values", () => {

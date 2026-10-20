@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isSupportedCurrency } from "./currency";
 import { ISO_DATE } from "./model";
+import { getUserStorageKey } from "./userStorage";
 
 export const DAILY_BUDGET_KEY = "studyrunway.daily-budget.v1";
 export const DAILY_BUDGET_CHANGE_EVENT = "studyrunway:daily-budget-changed";
@@ -49,7 +50,7 @@ export function emptyDailyBudget(): DailyBudgetState {
 export function loadDailyBudget(): DailyBudgetState {
   if (typeof window === "undefined") return emptyDailyBudget();
   try {
-    const raw = window.localStorage.getItem(DAILY_BUDGET_KEY);
+    const raw = window.localStorage.getItem(getUserStorageKey(DAILY_BUDGET_KEY));
     if (!raw) return emptyDailyBudget();
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return emptyDailyBudget();
@@ -80,7 +81,7 @@ export function saveDailyBudget(value: DailyBudgetState): boolean {
   const parsed = DailyBudgetSchema.safeParse(value);
   if (!parsed.success) return false;
   try {
-    window.localStorage.setItem(DAILY_BUDGET_KEY, JSON.stringify(parsed.data));
+    window.localStorage.setItem(getUserStorageKey(DAILY_BUDGET_KEY), JSON.stringify(parsed.data));
     window.dispatchEvent(new Event(DAILY_BUDGET_CHANGE_EVENT));
     return true;
   } catch {

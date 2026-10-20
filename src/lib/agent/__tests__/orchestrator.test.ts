@@ -288,6 +288,43 @@ describe("model-driven loop", () => {
     expect(provider.chat).not.toHaveBeenCalled();
   });
 
+  it("calculates a complete tuition shortfall before asking optional policy questions", async () => {
+    const provider = new ScriptedProvider([json({
+      ...UNDERSTANDING,
+      currencies: ["USD"],
+      questions: [{
+        id: "q-installments",
+        kind: "quick_replies",
+        prompt: "Does your university offer tuition instalments?",
+        options: ["Yes", "No", "Not sure"],
+      }],
+    })]);
+    const message =
+      "As of 2026-10-18. I have USD 1,500 available. My USD 1,000 scholarship should arrive in 3 weeks. " +
+      "Tuition of USD 2,400 is due in 12 days. Can I pay on time? Rank the urgent next steps.";
+    const events = await collect(runAgent({
+      sessionId: "s-tuition-shortfall-preflight",
+      message,
+      tools: [PING_TOOL, analyzeFundingGapTool],
+      provider,
+    }));
+
+    expectValidEvents(events);
+    expect(events.some((event) => event.type === "clarify")).toBe(false);
+    expect(events.find((event) => event.type === "tool_call_end" && event.tool === "analyze_funding_gap"))
+      .toMatchObject({ ok: true });
+    expect(events.find((event) => event.type === "result" && event.component === "financial_outcome"))
+      .toMatchObject({ data: { hasGap: true, shortfallMinor: 90_000, gapDate: "2026-10-30", verified: true } });
+    const answer = events.find((event) => event.type === "assistant_text" && event.text.startsWith("No—"));
+    expect(answer?.type).toBe("assistant_text");
+    if (answer?.type === "assistant_text") {
+      expect(answer.text).toContain("Contact the university billing office");
+      expect(answer.text).toContain("scholarship release date");
+    }
+    expect(provider.calls).toHaveLength(1);
+    expect(getTask("s-tuition-shortfall-preflight")?.status).toBe("done");
+  });
+
   it("does not misroute a university email draft to the tuition timing form", async () => {
     const provider = new ScriptedProvider([
       json(UNDERSTANDING),
@@ -651,6 +688,65 @@ describe("model-driven loop", () => {
     expectValidEvents(events);
     expect(events.find((event) => event.type === "tool_call_end" && event.tool === "build_action_plan")).toMatchObject({ ok: true });
     expect(events.some((event) => event.type === "tool_call_end" && event.tool === "build_action_plan" && !event.ok)).toBe(false);
+    expect(events.some((event) => event.type === "assistant_text" && event.text.includes("Prioritized next steps:"))).toBe(true);
+    const outcome = events.find((event) => event.type === "result" && event.component === "financial_outcome");
+    expect(outcome?.type).toBe("result");
+    if (outcome?.type === "result") {
+      expect(outcome.data["actionPlan"]).toMatchObject({ actions: expect.any(Array) });
+    }
+  });
+
+  it("does not expose the approval-gated email tool unless the user asks for a draft", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "gap-without-email", name: "analyze_funding_gap", args: {} }]),
+      toolTurn([{ id: "actions-without-email", name: "build_action_plan", args: {} }]),
+      textOnly("The funding analysis is complete."),
+    ]);
+    const events = await collect(runAgent({
+      sessionId: "s-no-unsolicited-email-draft",
+      message:
+        "As of 2026-10-18. I have savings of USD 500 available 2026-10-18. " +
+        "Tuition of USD 1,200 is committed and due 2026-10-30. Can I pay on time? Rank next steps.",
+      tools: [PING_TOOL, analyzeFundingGapTool, buildActionPlanTool, draftEmailTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(provider.calls.some((call) => call.tools.some((tool) => tool.name === "draft_email"))).toBe(false);
+    expect(events.some((event) => event.type === "clarify" && event.questions.some((question) => question.kind === "form"))).toBe(false);
+    expect(events.some((event) => event.type === "result" && event.component === "financial_outcome")).toBe(true);
+  });
+
+  it("returns completed financial results when Vertex fails after successful tools", async () => {
+    const provider = new ScriptedProvider([
+      json(UNDERSTANDING),
+      json(PLAN),
+      toolTurn([{ id: "gap-before-provider-failure", name: "analyze_funding_gap", args: {} }]),
+      toolTurn([{ id: "actions-before-provider-failure", name: "build_action_plan", args: {} }]),
+    ], "vertex");
+    const events = await collect(runAgent({
+      sessionId: "s-vertex-failure-after-tools",
+      message:
+        "As of 2026-10-18. I have savings of USD 500 available 2026-10-18. " +
+        "Tuition of USD 1,200 is committed and due 2026-10-30. Can I still pay tuition on time?",
+      tools: [PING_TOOL, analyzeFundingGapTool, buildActionPlanTool],
+      provider,
+      toolTimeoutMs: 5000,
+    }));
+
+    expectValidEvents(events);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const outcome = events.find((event) => event.type === "result" && event.component === "financial_outcome");
+    expect(outcome?.type).toBe("result");
+    if (outcome?.type === "result") {
+      expect(outcome.data).toMatchObject({ hasGap: true, shortfallMinor: 70_000, verified: true });
+      expect(outcome.data["summary"]).toContain("Prioritized next steps:");
+      expect(outcome.data["actionPlan"]).toMatchObject({ actions: expect.any(Array) });
+    }
+    expect(events.some((event) => event.type === "assistant_text" && event.text.includes("Prioritized next steps:"))).toBe(true);
   });
 
   it("runs understand → plan → tools → verify → outcome with exact event shapes", async () => {

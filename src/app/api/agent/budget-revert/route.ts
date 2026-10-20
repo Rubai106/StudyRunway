@@ -8,6 +8,10 @@
 import { revertBudgetFromTask } from "@/lib/budgetApply";
 import { requestOriginError, sessionIdError, sessionPersistenceResponse } from "@/lib/agent/session";
 import { BUDGET_ACTION_ACKS } from "@/lib/budgetApproval";
+import { getTask } from "@/lib/agent/state";
+import { writeAuditEvent } from "@/lib/agent/audit";
+import { requireApiUser, scopeSessionId } from "@/lib/auth/requireUser";
+import { withPersistentSession } from "@/lib/agent/firestoreSessionStore";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,6 +19,8 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 64 * 1024;
 
 export async function POST(req: Request): Promise<Response> {
+  const user = await requireApiUser();
+  if (user instanceof Response) return user;
   const persistenceError = sessionPersistenceResponse();
   if (persistenceError) return persistenceError;
   const originError = requestOriginError(req);
@@ -35,16 +41,23 @@ export async function POST(req: Request): Promise<Response> {
   if (sidErr) {
     return Response.json({ ok: false, error: sidErr }, { status: 400 });
   }
+  const sessionId = scopeSessionId(user.id, body.sessionId as string);
   if (body.approvalAck !== BUDGET_ACTION_ACKS.revert) {
     return Response.json({ ok: false, error: "Explicit approval is required before reverting this budget." }, { status: 400 });
   }
-  try {
-    const result = revertBudgetFromTask(body.sessionId as string);
-    return Response.json({ ok: true, ...result });
-  } catch (err) {
-    return Response.json(
-      { ok: false, error: err instanceof Error ? err.message : "revert failed" },
-      { status: 400 }
-    );
-  }
+  return withPersistentSession(sessionId, async () => {
+    try {
+      const result = revertBudgetFromTask(sessionId);
+      const task = getTask(sessionId);
+      if (task) await writeAuditEvent({ type: "agent.plan.changed", taskId: task.taskId, action: "budget_revert", ok: true });
+      return Response.json({ ok: true, ...result });
+    } catch (err) {
+      const task = getTask(sessionId);
+      if (task) await writeAuditEvent({ type: "agent.plan.changed", taskId: task.taskId, action: "budget_revert", ok: false });
+      return Response.json(
+        { ok: false, error: err instanceof Error ? err.message : "revert failed" },
+        { status: 400 }
+      );
+    }
+  });
 }

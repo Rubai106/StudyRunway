@@ -115,19 +115,37 @@ function readActions(data: Record<string, unknown> | null): ActionItem[] {
 
 function readShortfall(data: Record<string, unknown>) {
   const shortfall = isRecord(data["shortfall"]) ? data["shortfall"] : null;
+  const confirmedOnly = isRecord(data["confirmedOnly"]) ? data["confirmedOnly"] : null;
+  const cashFlow = isRecord(data["cashFlow"]) ? data["cashFlow"] : null;
+  const fundingSources = asArray<Record<string, unknown>>(cashFlow?.["fundingSources"]);
+  const scholarshipMarkedConfirmed = fundingSources.some((source) =>
+    source["kind"] === "scholarship" && source["status"] === "confirmed_pending",
+  );
   const amountMinor = asNumber(shortfall?.["amountMinor"] ?? data["shortfallMinor"]);
   const amount = asNumber(shortfall?.["amount"] ?? data["shortfall"]);
+  const confirmedOnlyAmountMinor = asNumber(confirmedOnly?.["shortfallMinor"]);
+  const confirmedOnlyAmount = asNumber(confirmedOnly?.["shortfall"]);
   const currency = asString(shortfall?.["currency"] ?? data["planningCurrency"] ?? data["currency"]);
   const date = asString(shortfall?.["date"] ?? data["gapDate"]);
+  const confirmedOnlyDate = asString(confirmedOnly?.["gapDate"]);
   return {
     hasGap: data["hasGap"] === true || (amountMinor !== null && amountMinor > 0) || (amount !== null && amount > 0),
     knownNoGap: data["hasGap"] === false,
+    forecastComplete: data["forecastComplete"] === true,
+    confirmedOnlyHasGap: confirmedOnly?.["hasGap"] === true,
+    scholarshipMarkedConfirmed,
     amountText: amountMinor !== null && currency
       ? formatMinorMoney(amountMinor, currency)
       : amount !== null
         ? formatMoney(amount, currency)
         : null,
+    confirmedOnlyAmountText: confirmedOnlyAmountMinor !== null && currency
+      ? formatMinorMoney(confirmedOnlyAmountMinor, currency)
+      : confirmedOnlyAmount !== null
+        ? formatMoney(confirmedOnlyAmount, currency)
+        : null,
     date,
+    confirmedOnlyDate,
     currency,
     verdict: asString(data["verdict"] ?? data["summary"]),
   };
@@ -213,11 +231,18 @@ function cashFlowStatus(status: string, direction: "in" | "out"): string {
   if (direction === "out") return status === "committed" ? "Committed" : "Planned";
   return ({
     confirmed_available: "Available",
-    confirmed_pending: "Confirmed incoming",
-    conditional: "Conditional",
-    estimated: "Estimated",
-    unverified: "Unverified",
+    confirmed_pending: "Listed as confirmed and scheduled",
+    conditional: "Conditional award",
+    estimated: "Expected, not confirmed",
+    unverified: "Not verified",
   } as Record<string, string>)[status] ?? "Status unknown";
+}
+
+function cashFlowStatusTone(status: string, direction: "in" | "out"): string {
+  if (direction === "out") return "bg-[var(--sr-mist)]/70 text-[var(--sr-ink)]/70";
+  if (status === "confirmed_available" || status === "confirmed_pending") return "bg-[var(--sr-pine)]/10 text-[var(--sr-pine)]";
+  if (status === "conditional" || status === "estimated") return "bg-[var(--sr-amber)]/10 text-[var(--sr-amber)]";
+  return "bg-[var(--sr-clay)]/10 text-[var(--sr-clay)]";
 }
 
 function displayCashFlowDate(date: string | null, direction: "in" | "out", status: string, asOfDate: string): string {
@@ -335,6 +360,12 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
   const hasFinanceContext = fundingSource !== null || planSource !== null || latestDocument !== null;
   const statusTitle = funding?.hasGap
     ? "A tuition shortfall needs a plan"
+    : funding && !funding.forecastComplete
+      ? "Some forecast details are missing"
+      : funding?.knownNoGap && funding.scholarshipMarkedConfirmed
+      ? "Check the scholarship schedule"
+      : funding?.knownNoGap && funding.confirmedOnlyHasGap
+        ? "Covered if expected funding arrives"
     : funding?.knownNoGap
       ? "Tuition appears covered in this forecast"
       : fundingSource
@@ -349,8 +380,8 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
   ];
 
   return (
-    <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8 sm:py-9">
-      <div className="mx-auto max-w-6xl">
+    <main className="sr-dashboard min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8 sm:py-9">
+      <div className="mx-auto max-w-7xl">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-xs font-semibold text-[var(--sr-pine)]">StudyRunway overview</p>
@@ -386,8 +417,21 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
                 <p className="mt-1 text-sm text-[var(--sr-ink)]/75">
                   Forecast shortfall: <strong>{funding.amountText}</strong>{funding.date && <> by <strong>{funding.date}</strong></>}
                 </p>
-              ) : funding?.verdict ? (
-                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">{funding.verdict}</p>
+              ) : funding && !funding.forecastComplete ? (
+                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">Add the missing amounts or dates before relying on this forecast.</p>
+              ) : funding?.knownNoGap && funding.scholarshipMarkedConfirmed ? (
+                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">This forecast counts a scholarship as scheduled. Verify the final award and payment date before relying on it.</p>
+              ) : funding?.knownNoGap && funding.confirmedOnlyHasGap ? (
+                <div className="mt-2 space-y-2">
+                  <p className="text-sm leading-relaxed text-[var(--sr-ink)]/70">Tuition is covered in the full forecast only if expected funding arrives as listed.</p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--sr-amber)]/30 bg-[#fbf3e2]/70 px-3 py-2.5">
+                    <span className="text-xs font-semibold text-[var(--sr-ink)]/65">Counting confirmed funds only</span>
+                    <strong className="text-sm text-[var(--sr-ink)]">Short by {funding.confirmedOnlyAmountText ?? "an unknown amount"}{funding.confirmedOnlyDate && ` on ${funding.confirmedOnlyDate}`}</strong>
+                  </div>
+                  <p className="text-xs leading-relaxed text-[var(--sr-ink)]/60">Confirm the scholarship award and payment date before relying on it.</p>
+                </div>
+              ) : funding?.knownNoGap ? (
+                <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">No shortfall is projected from the funds and bills entered through their listed dates.</p>
               ) : (
                 <p className="mt-1 text-sm leading-relaxed text-[var(--sr-ink)]/65">Add confirmed funds, expected scholarship dates, tuition amount, currency, and due date. The forecast will keep uncertain money separate.</p>
               )}
@@ -521,9 +565,16 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
 
           {cashFlow ? (
             <>
+              {(cashFlow.fundingSources.some((item) => ["conditional", "estimated", "unverified"].includes(item.status)) ||
+                cashFlow.fundingSources.some((item) => item.kind === "scholarship" && item.status === "confirmed_pending")) && (
+                <p className="mt-4 rounded-lg border border-[var(--sr-amber)]/30 bg-[#fbf3e2]/55 px-3 py-2.5 text-xs leading-relaxed text-[var(--sr-ink)]/75">
+                  {cashFlow.fundingSources.some((item) => ["conditional", "estimated", "unverified"].includes(item.status)) && <span>Expected and conditional funding is a scenario, not a promise. Confirm the amount and release date before relying on it.</span>}
+                  {cashFlow.fundingSources.some((item) => item.kind === "scholarship" && item.status === "confirmed_pending") && <span className="block">Scholarships listed as confirmed still need a final award and payment date. Verify both before relying on the money.</span>}
+                </p>
+              )}
               <div className="mt-5 grid gap-4 lg:grid-cols-2">
                 {([
-                  { title: "Expected funds", direction: "in" as const, groups: groupCashFlow(cashFlow.fundingSources, "in"), icon: ArrowDownLeft },
+                  { title: "Funding sources", direction: "in" as const, groups: groupCashFlow(cashFlow.fundingSources, "in"), icon: ArrowDownLeft },
                   { title: "Upcoming bills", direction: "out" as const, groups: groupCashFlow(cashFlow.bills, "out"), icon: ArrowUpRight },
                 ]).map(({ title, direction, groups, icon: Icon }) => (
                   <div key={title} className="rounded-xl border border-[var(--sr-line)] bg-white/70 p-4">
@@ -541,8 +592,8 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
                                 {direction === "in" ? (
                                   <>
                                     <span className="block">Available {group.availableMinor === null ? "—" : formatMinorMoney(group.availableMinor, group.currency)}</span>
-                                    <span className="block">Confirmed incoming {group.confirmedPendingMinor === null ? "—" : formatMinorMoney(group.confirmedPendingMinor, group.currency)}</span>
-                                    <span className="block">Conditional / estimated {group.uncertainMinor === null ? "—" : formatMinorMoney(group.uncertainMinor, group.currency)}</span>
+                                    <span className="block">Listed as confirmed {group.confirmedPendingMinor === null ? "—" : formatMinorMoney(group.confirmedPendingMinor, group.currency)}</span>
+                                    <span className="block">Unconfirmed {group.uncertainMinor === null ? "—" : formatMinorMoney(group.uncertainMinor, group.currency)}</span>
                                   </>
                                 ) : (
                                   <span className="block">{group.billsMinor === null ? "Known subtotal unavailable" : `Known subtotal ${formatMinorMoney(group.billsMinor, group.currency)}`}</span>
@@ -563,7 +614,7 @@ export default function Dashboard({ messages, onAsk, onOpenConversation, disable
                                     </div>
                                     <div className="shrink-0 text-right">
                                       <p className="text-xs font-bold tabular-nums">{record.amountMinor === null ? "Amount unknown" : formatMinorMoney(record.amountMinor, record.currency)}</p>
-                                      <p className="mt-0.5 text-[10px] text-[var(--sr-ink)]/50">{cashFlowStatus(record.status, direction)}</p>
+                                      <p className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${cashFlowStatusTone(record.status, direction)}`}>{cashFlowStatus(record.status, direction)}</p>
                                     </div>
                                   </div>
                                 </li>
