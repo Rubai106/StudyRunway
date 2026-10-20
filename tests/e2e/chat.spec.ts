@@ -48,12 +48,17 @@ async function installMocks(page: Page) {
 
     const message = body.message ?? "";
     const formValidation = message.includes("FORM-VALIDATION");
-    const slow = message.includes("SLOW-STREAM");    const events: string[] = [
+    const slow = message.includes("SLOW-STREAM");
+    const events: string[] = [
       `data: {"type":"status","phase":"planning"}`,
       `data: {"type":"assistant_text","text":"Here's what I found. "}`,
       `data: {"type":"tool_call_start","id":"t1","tool":"compare_transfers","label":"Comparing transfer quotes"}`,
       `data: {"type":"tool_call_end","id":"t1","tool":"compare_transfers","ok":true,"summary":"3 quotes compared","durationMs":120}`,
-      ...(!formValidation ? [`data: {"type":"clarify","questions":[{"id":"q-term","kind":"quick_replies","prompt":"Which term is this for?","options":["Fall","Spring"]}]}`] : []),
+      ...(!formValidation
+        ? [
+            `data: {"type":"clarify","questions":[{"id":"q-term","kind":"quick_replies","prompt":"Which term is this for?","options":["Fall","Spring"]}]}`,
+          ]
+        : []),
       `data: {"type":"clarify","questions":[{"id":"q-amount","kind":"amount","prompt":"How much do you need to send?","options":["EUR","GBP","USD"]}]}`,
     ];
     if (slow) {
@@ -188,7 +193,9 @@ test("form validation blocks bad amount input", async ({ page }) => {
   test.skip(LIVE, "mocked API");
   // Use a deterministic mock response with only the amount form so this
   // test targets amount validation without depending on a multi-turn flow.
-  await page.getByRole("textbox", { name: /message studyrunway/i }).fill("FORM-VALIDATION please");
+  await page
+    .getByRole("textbox", { name: /message studyrunway/i })
+    .fill("FORM-VALIDATION please");
   await page.getByTestId("send-button").click();
 
   const amountInput = page.locator('input[type="number"]').first();
