@@ -1036,10 +1036,11 @@ export async function askModelJson<T>(
   systemExtra: string,
   user: string,
   schema: z.ZodTypeAny,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  language?: LanguageCode
 ): Promise<T> {
   const base: ChatMessage[] = [
-    { role: "system", content: `${SYSTEM_PROMPT}\n\n${systemExtra}` },
+    { role: "system", content: `${systemPromptForLanguage(language)}\n\n${systemExtra}` },
     { role: "user", content: sanitizeForModel(user) },
   ];
   let failureReason = "unknown structured-output failure";
@@ -1742,7 +1743,8 @@ async function* runModelFlow(
           `Ask at most 4 questions, only for information required to complete the user's requested financial task. Never ask for facts already stated in the original request, confirmed facts, or current financial plan. If nothing is missing, use [].`,
         buildContextMessage(state, message),
         UnderstandingJsonSchema,
-        opts.signal
+        opts.signal,
+        opts.language
       );
     } catch (err) {
       if (isTransientError(err) && isTuitionTimingRequest(state.originalRequest || message)) {
@@ -1991,7 +1993,8 @@ async function* runModelFlow(
         `Now produce a short plan as JSON: { steps: [{ id, title, detail? }] } — 2 to 6 steps. Each step should map to checking facts, calling a tool, or summarising.`,
         buildContextMessage(state, message || state.originalRequest),
         ModelPlanSchema,
-        opts.signal
+        opts.signal,
+        opts.language
       );
     } catch (err) {
       state = updateTask(sessionId, { status: "failed" });
