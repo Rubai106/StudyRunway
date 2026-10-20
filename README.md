@@ -8,7 +8,7 @@ This is a fresh rebuild. The old shelved build lives at
 ## Stack
 
 Next.js 15.5.28 (pinned) · React 19.1.0 · TypeScript 5.7.3 · Tailwind CSS 3.4 ·
-vitest 3.2.3 · Playwright 1.53.1 · three 0.182 + @react-three/fiber 9.4.2 + drei 10.7.7
+vitest 3.2.7 · Playwright 1.64.1 · three 0.182 + @react-three/fiber 9.4.2 + drei 10.7.7
 (3D tool visualizer) · zod 3.24.2 (domain validation) · pdfjs-dist (local PDF evidence
 extraction) · sharp 0.35.5.
 
@@ -152,20 +152,23 @@ No AI response can authorize a simulation or override a decision status.
 - Returns only sanitized simulation/decision/forecast fields from recorded state.
 - No API keys, secrets, or hidden prompts are included.
 
-### Storage limitation
+### Session and browser storage
 
-Funding-risk workflow state and sandbox records are session-scoped in-memory
-objects and are not durable across process restarts.
+On the configured Cloud Run deployment, authenticated agent task state is stored
+in Firestore with request-level concurrency checks and expiry metadata. Local
+development defaults to process-local memory unless the Firestore store is
+configured. Browser-only transcripts, reminders, budgets, and preferences remain
+in account-namespaced local storage on that device; they are not synced or backed
+up to Firestore. See `docs/SETUP.md` and `docs/SECURITY_SELF_ASSESSMENT.md` for
+the exact deployment boundary and remaining risks.
 
-## Verification status
+## Latest verification status — 2026-10-20
 
-The 2026-10-15 runtime results documented in `docs/TEST_RESULTS.md` apply to
-the archive tested on that date. A follow-up QA review on 2026-10-16 found and
-patched an additional budget-apply integrity edge case and added regression
-tests. The follow-up source passed TypeScript/TSX syntax parsing and cost-dataset
-structural validation, but runtime verification of those latest changes is
-**pending**: clean dependency installation and `npm audit` were blocked by npm
-registry DNS (`EAI_AGAIN registry.npmjs.org`). Do not treat the earlier test
-totals as proof that the follow-up patch passes. Once registry access is
-restored, run the full command set in `docs/TEST_RESULTS.md`, including the new
-integrity regression tests, and record the actual outputs.
+The latest successful GitHub Actions quality run on `main` is commit
+`cbe0a31999b54d57299d4a49db2ef79f4b6ba184` ([workflow run](https://github.com/Rubai106/StudyRunway/actions/runs/39411467566)). It completed `npm ci`, typecheck, lint, unit/API tests (**390 tests across 38 files**), production build, and Playwright E2E (**66 passed in 1.6 minutes**). Older totals in the historical QA log are not current.
+
+**Dependency risk remains open.** The latest CI install reported 15 dependency findings (1 moderate, 12 high, 2 critical). A Windows production-only audit on 2026-10-19 reported zero vulnerabilities, but that does not clear the full dependency tree. Do not run `npm audit fix --force` blindly; assess compatible updates and re-run checks after changing dependencies.
+
+The submission's execution-evidence video records a separate local sandbox run at revision `e213b84272d98b03b51807bd1e416bc4f0ad0933` in demo mode. It is not evidence that the hosted app completed an authenticated transaction workflow. During the evidence review, the hosted app displayed a Google sign-in gate and anonymous agent API requests returned 401. The video and manifest make the environment and revision explicit; no real payment occurred.
+
+For the submission checklist and the current evidence boundaries, start at `docs/FINTECHATHON_SUBMISSION_INDEX.md`.
