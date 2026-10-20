@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { translateDashboard } from "./dashboardTranslations";
 import {
   getExamples,
   isLanguageCode,
@@ -42,4 +43,16 @@ describe("multilingual assistant support", () => {
     expect(responseLanguageInstruction("en")).toContain("English");
     expect(responseLanguageInstruction("es")).toContain("do not change calculations");
   });
+  it("localizes the main dashboard overview in every supported language", () => {
+    for (const language of SUPPORTED_LANGUAGES) {
+      expect(translateDashboard(language.code, "title").length).toBeGreaterThan(8);
+      expect(translateDashboard(language.code, "workflowTitle").length).toBeGreaterThan(5);
+      expect(translateDashboard(language.code, "statusShortfall").length).toBeGreaterThan(5);
+    }
+    expect(translateDashboard("bn", "title")).toContain("আর্থিক");
+    expect(translateDashboard("zh", "title")).toContain("财务");
+    expect(translateDashboard("hi", "title")).toContain("वित्तीय");
+    expect(translateDashboard("es", "title")).toContain("finanzas");
+  });
+
 });
